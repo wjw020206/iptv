@@ -41,6 +41,11 @@ try {
   await assert.rejects(syncCos(env, { upload }), /HTTP 403/)
   assert.equal(uploads.length, 2, '失败时不应覆盖 COS')
   status = 200
+  content = '#EXTM3U\n#EXTINF:-1 group-title="央视",CCTV1综合\nhttps://cdn.example/one.m3u8\n#EXTINF:-1 group-title="央视频",CCTV1综合\nhttps://cdn.example/two.m3u8\n'
+  await syncCos(env, { upload })
+  assert.equal((uploads.at(-1).Body.toString().match(/^#EXTINF:/gm) || []).length, 2, '默认仍为标准 M3U')
+  await syncCos({ ...env, COS_MERGE_LINES: 'true' }, { upload })
+  assert.equal(uploads.at(-1).Body.toString(), '#EXTM3U\n#EXTINF:-1 group-title="央视",CCTV1综合\nhttps://cdn.example/one.m3u8\nhttps://cdn.example/two.m3u8\n')
   content = undefined
   await assert.rejects(syncCos(env, { upload: async () => { throw new Error('secret') } }), /COS 上传失败/)
   await assert.rejects(syncCos({ ...env, COS_PUBLIC_BASE_URL: 'http://localhost:1905' }, { upload }), /回环地址/)

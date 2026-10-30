@@ -13,7 +13,7 @@ const port = probe.address().port
 await new Promise(resolve => probe.close(resolve))
 Object.assign(process.env, { mdataDir: dir, mport: String(port), mpass: 'cos-test-pass', mblank: 'true', mbuiltInSourcesUrl: '', NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' })
 writeFileSync(join(dir, 'external-sources.json'), JSON.stringify({ enabled: false, updateOnStartup: false, sources: [] }))
-writeFileSync(join(dir, 'interface.txt'), '#EXTM3U x-tvg-url="${replace}/playback.xml"\n#EXTINF:-1 tvg-name="测试" group-title="测试",测试\n${replace}/123\n')
+writeFileSync(join(dir, 'interface.txt'), '#EXTM3U x-tvg-url="${replace}/playback.xml"\n#EXTINF:-1 tvg-name="测试" group-title="测试",测试\n${replace}/123\n#EXTINF:-1 tvg-name="测试" group-title="备用",测试\n${replace}/relay/ysp-test.m3u8\n')
 writeFileSync(join(dir, 'interfaceTXT.txt'), '测试,#genre#\n测试,${replace}/123\n')
 let browser
 let exitCode = 0
@@ -43,13 +43,22 @@ try {
     await page.$eval(`#${id}`, (el, value) => { el.value = value }, value)
   }
   await page.click('#cosUploadBtn')
-  await page.waitForFunction(() => document.querySelector('#cosStatus').textContent.includes('最近上传成功'))
+  await page.waitForFunction(() => !document.querySelector('#cosFields').disabled && document.querySelector('#cosStatus').textContent.includes('最近上传成功'))
   assert.equal(uploads.length, 1)
   assert.ok(uploads[0].Body.toString().includes('http://203.0.113.10:1905/cos-test-pass/'))
   assert.ok(!uploads[0].Body.toString().includes('127.0.0.1'))
   assert.equal(await page.$eval('#cosSecretKey', el => el.value), '')
   assert.equal(await page.$eval('#cosUrl', el => el.value), 'https://tv-12345.cos.ap-shanghai.myqcloud.com/tv.m3u')
-  await page.click('#cosEnabled')
+  assert.equal((uploads[0].Body.toString().match(/^#EXTINF:/gm) || []).length, 2)
+  await page.$eval('#cosMergeLines', el => el.click())
+  assert.equal(await page.$eval('#cosMergeLines', el => el.checked), true)
+  await page.click('#cosUploadBtn')
+  await page.waitForFunction(() => !document.querySelector('#cosFields').disabled && document.querySelector('#cosStatus').textContent.includes('最近上传成功'))
+  assert.equal(uploads.length, 2)
+  assert.equal(cosSync.view().config.mergeLines, true)
+  assert.equal((uploads[1].Body.toString().match(/^#EXTINF:/gm) || []).length, 1, uploads[1].Body.toString())
+  assert.ok(uploads[1].Body.toString().includes('/123\nhttp://203.0.113.10:1905/cos-test-pass/relay/ysp-test.m3u8'))
+  await page.$eval('#cosEnabled', el => el.click())
   await page.click('#cosSaveBtn')
   await page.waitForFunction(() => !document.querySelector('#cosFields').disabled && !document.querySelector('#cosStatus').textContent.includes('未开启'))
   assert.equal(cosSync.view().config.enabled, true)
@@ -61,6 +70,8 @@ try {
   assert.ok(!JSON.stringify(data).includes('test-key'))
   assert.ok(!JSON.stringify(data).includes('test-id'))
   assert.equal(data.config.hasSecretKey, true)
+  assert.equal(data.config.mergeLines, true)
+  assert.equal(await page.$eval('#cosMergeLines', el => el.checked), true)
   // 沿用原有输入框样式，密码输入框与普通文本框尺寸/边框一致。
   assert.deepEqual(await page.evaluate(() => {
     const style = id => { const s = getComputedStyle(document.getElementById(id)); return [s.height, s.padding, s.borderRadius, s.borderColor] }

@@ -24,6 +24,7 @@ const config = {
 }
 try {
   assert.equal(service.view().config.enabled, false)
+  assert.equal(service.view().config.mergeLines, false)
   service.save(config)
   assert.equal(statSync(configFile).mode & 0o777, 0o600)
   assert.ok(!JSON.stringify(service.view()).includes('private-'))
@@ -31,14 +32,17 @@ try {
   service.save({ secretId: '', secretKey: '' })
   assert.equal(JSON.parse(readFileSync(configFile)).secretKey, 'private-key')
   assert.equal(service.view().url, 'https://tv-1234567.cos.ap-shanghai.myqcloud.com/tv/iptv.m3u')
-  for (const input of [{ intervalMinutes: 0 }, { intervalMinutes: 1.5 }, { enabled: 'false' }, { publicBaseUrl: 'http://localhost:1905' }, { profile: '../bad' }, { relay: '3' }]) {
+  for (const input of [{ intervalMinutes: 0 }, { intervalMinutes: 1.5 }, { enabled: 'false' }, { mergeLines: 'true' }, { publicBaseUrl: 'http://localhost:1905' }, { profile: '../bad' }, { relay: '3' }]) {
     assert.throws(() => service.save(input))
   }
   await service.tick()
   assert.equal(calls.length, 0)
+  service.save({ mergeLines: true })
+  assert.equal(service.view().config.mergeLines, true)
   time += 120_000
   await service.tick()
   assert.equal(calls.length, 1)
+  assert.equal(calls[0].COS_MERGE_LINES, 'true')
   assert.ok(calls[0].COS_SOURCE_URL.startsWith('http://127.0.0.1:12345/'))
   assert.ok(calls[0].COS_SOURCE_URL.endsWith('interface.m3u?profile=bedroom&relay=1'))
   assert.equal(service.view().status.lastSuccessAt, time)

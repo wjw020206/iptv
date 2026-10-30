@@ -1,3 +1,5 @@
+import { mergePlaylistLines } from './multiLinePlaylist.js'
+
 /** 下载本机已经应用配置档的订阅，替换本机前缀后再上传；不读取内部模板文件。 */
 export function validateCosEnv(env) {
   for (const key of ['COS_SECRET_ID', 'COS_SECRET_KEY', 'COS_BUCKET', 'COS_REGION', 'COS_PUBLIC_BASE_URL']) {
@@ -36,7 +38,8 @@ export async function syncCos(env = process.env, { fetchImpl = fetch, upload } =
   }
   // 本机请求在 interfaceStr 中固定使用请求 Host，不受 mhost 配置影响。
   // 同时替换频道、台标、EPG、回看等本项目地址，保留密码或用户令牌路径。
-  const body = content.replaceAll(`${source.origin}/`, `${base.origin}/`)
+  const rewritten = content.replaceAll(`${source.origin}/`, `${base.origin}/`)
+  const body = env.COS_MERGE_LINES === 'true' ? mergePlaylistLines(rewritten) : rewritten
   const params = {
     Bucket: env.COS_BUCKET,
     Region: env.COS_REGION,

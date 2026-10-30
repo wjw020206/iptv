@@ -4841,6 +4841,7 @@
                             <div class="system-config-item"><label for="cosPublicBaseUrl">IPTV 服务器公网地址</label><input type="text" id="cosPublicBaseUrl" placeholder="http://你的公网IP:1905"><div class="system-config-hint">填写完整协议和端口，不是 COS 地址，不含访问密码或目录。IP 变化后手动更新这里。</div></div>
                             <div class="system-config-item"><label for="cosProfile">配置档 ID</label><input type="text" id="cosProfile" placeholder="留空使用默认档"><div class="system-config-hint">沿用该档的排序、分组和隐藏设置。</div></div>
                             <div class="system-config-item"><label for="cosRelay">订阅模式</label><select id="cosRelay"><option value="">标准版</option><option value="1">兼容版</option><option value="2">全代理版</option></select></div>
+                            <div class="system-config-item"><label class="sys-check-label" for="cosMergeLines"><input type="checkbox" id="cosMergeLines">同名频道合并为多线路</label><div class="system-config-hint">跨分组合并相同显示名，一条频道信息下连续写多条地址。采用首条的分组、台标和线路顺序，重复地址只留一条。需播放器支持该扩展格式；回看设置不一致时关闭该频道回看，请求头不同的线路保持独立。</div></div>
                             <div class="system-config-item"><label class="sys-check-label" for="cosEnabled"><input type="checkbox" id="cosEnabled">启用定时上传</label><div class="system-config-hint">保存即生效，无需额外设置系统计划任务。服务运行期间按间隔上传已有频道列表。</div></div>
                             <div class="system-config-item"><label for="cosIntervalMinutes">上传间隔（分钟）</label><input type="number" id="cosIntervalMinutes" min="1" max="10080" value="10"></div>
                         </div>
@@ -9723,6 +9724,7 @@ if(success){
                         cosField(name).value = name.startsWith('secret') ? '' : result.config[name];
                     }
                     cosField('enabled').checked = result.config.enabled;
+                    cosField('mergeLines').checked = result.config.mergeLines === true;
                     cosLoaded = true;
                 }
                 cosField('secretId').placeholder = result.config.hasSecretId ? '已保存，留空保持不变' : '填写 SecretId';
@@ -9739,6 +9741,7 @@ if(success){
             try {
                 const config = Object.fromEntries(cosFieldNames.map(name => [name, name === 'intervalMinutes' ? Number(cosField(name).value) : cosField(name).value.trim()]));
                 config.enabled = cosField('enabled').checked;
+                config.mergeLines = cosField('mergeLines').checked;
                 const saved = await cosRequest({ action: 'save', config });
                 cosField('secretId').value = '';
                 cosField('secretKey').value = '';

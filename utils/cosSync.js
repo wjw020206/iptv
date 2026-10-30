@@ -4,7 +4,7 @@ import { writeJsonFileSync } from './fileUtil.js'
 import { pass, port } from '../config.js'
 import { syncCos, validateCosEnv } from './cosUpload.js'
 
-const DEFAULTS = { secretId: '', secretKey: '', bucket: '', region: 'ap-shanghai', key: 'iptv.m3u', publicBaseUrl: '', profile: '', relay: '', enabled: false, intervalMinutes: 10 }
+const DEFAULTS = { secretId: '', secretKey: '', bucket: '', region: 'ap-shanghai', key: 'iptv.m3u', publicBaseUrl: '', profile: '', relay: '', mergeLines: false, enabled: false, intervalMinutes: 10 }
 
 function readJson(file, fallback) {
   if (!existsSync(file)) return fallback
@@ -29,6 +29,7 @@ export class CosSync {
     return {
       COS_SECRET_ID: c.secretId, COS_SECRET_KEY: c.secretKey, COS_BUCKET: c.bucket,
       COS_REGION: c.region, COS_KEY: c.key, COS_PUBLIC_BASE_URL: c.publicBaseUrl,
+      COS_MERGE_LINES: c.mergeLines ? 'true' : 'false',
       COS_SOURCE_URL: `http://127.0.0.1:${this.getPort()}${pass ? `/${pass}` : ''}/interface.m3u?${query}`,
     }
   }
@@ -51,9 +52,9 @@ export class CosSync {
     const c = this.config()
     for (const key of Object.keys(DEFAULTS)) {
       if (!Object.hasOwn(input, key)) continue
-      if (key === 'enabled') {
-        if (typeof input.enabled !== 'boolean') throw new Error('定时上传开关必须是布尔值')
-        c.enabled = input.enabled
+      if (key === 'enabled' || key === 'mergeLines') {
+        if (typeof input[key] !== 'boolean') throw new Error('COS 开关必须是布尔值')
+        c[key] = input[key]
       } else if (key === 'intervalMinutes') {
         if (!Number.isInteger(input[key]) || input[key] < 1 || input[key] > 10080) throw new Error('上传间隔应为 1–10080 分钟的整数')
         c[key] = input[key]
