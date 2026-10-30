@@ -47,7 +47,7 @@ export async function syncCos(env = process.env, { fetchImpl = fetch, upload } =
     Body: Buffer.from(body, 'utf8'),
     ContentType: 'text/plain; charset=utf-8',
     CacheControl: 'no-cache, max-age=0',
-    ContentDisposition: 'inline; filename="iptv.m3u"',
+    ContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(key.split('/').pop())}`,
   }
   if (!upload) {
     const { default: COS } = await import('cos-nodejs-sdk-v5')

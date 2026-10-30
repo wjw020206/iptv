@@ -392,6 +392,8 @@ async function handleRequest(req, res) {
           const data = JSON.parse(await readBody(req))
           if (data.action === 'save') cosSync.save(data.config)
           else if (data.action === 'upload') await cosSync.run()
+          else if (data.action === 'clearHistory') cosSync.clearHistory()
+          else if (data.action === 'followAddress') cosSync.followAddress(data.publicBaseUrl)
           else throw new Error('未知 COS 操作')
         }
         res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8', 'Cache-Control': 'no-store' })
