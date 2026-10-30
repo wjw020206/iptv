@@ -1,5 +1,11 @@
 .git
 node_modules
+cos.env
+cos-config.json
+cos-config.json.tmp
+cos-state.json
+cos-sync.log
+.cos-sync.lock
 .workflow
 *.bak
 .github

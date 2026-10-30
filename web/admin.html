@@ -1443,6 +1443,7 @@
 
         .system-config-item input[type="text"],
         .system-config-item input[type="number"],
+        .system-config-item input[type="password"],
         .system-config-item select {
             width: 100%;
             padding: 8px;
@@ -2565,7 +2566,7 @@
         input[type="text"], input[type="number"], input[type="password"], input[type="url"],
         input[type="file"], select, textarea,
         .external-field input[type="text"], .external-field input[type="number"], .external-field select,
-        .system-config-item input[type="text"], .system-config-item input[type="number"], .system-config-item select,
+        .system-config-item input[type="text"], .system-config-item input[type="number"], .system-config-item input[type="password"], .system-config-item select,
         .modal-content input:not([type="checkbox"]):not([type="radio"]), .modal-content select, .modal-content textarea {
             min-height: 42px;
             padding: 9px 12px;
@@ -4647,6 +4648,7 @@
                     <button class="mode-switch-btn" onclick="switchSettingsTab(4)">用户管理</button>
                     <button class="mode-switch-btn" onclick="switchSettingsTab(5)">消息推送</button>
                     <button class="mode-switch-btn" onclick="switchSettingsTab(6)">备份迁移</button>
+                    <button class="mode-switch-btn" onclick="switchSettingsTab(7)">COS 订阅</button>
                 </div>
 
                 <div class="settings-subpanel active" id="settingsSub0">
@@ -4822,6 +4824,35 @@
                     </div>
                     <div class="system-config-hint" style="margin-top:6px;">导入会<strong>覆盖当前同名配置</strong>（导入前会自动把当前配置备份到数据目录 <code>config-pre-import-backup.json</code>，写坏可手动恢复）；导入后多数配置即时生效，端口修改需重启。</div>
                 </div>
+                </div>
+                <div class="settings-subpanel" id="settingsSub7">
+                    <section class="sys-section">
+                        <div class="sys-section-head">
+                            <div class="sys-section-title">腾讯云 COS 订阅</div>
+                            <div class="sys-section-desc">电视使用固定的 COS 订阅地址。服务器 IP 变化后，更新公网地址并上传，电视刷新订阅即可生效。播放时本服务仍需在线。</div>
+                        </div>
+                        <fieldset id="cosFields" style="border:0;padding:0;margin:0;min-width:0;">
+                        <div class="system-config-grid">
+                            <div class="system-config-item"><label for="cosSecretId">SecretId</label><input type="password" id="cosSecretId" autocomplete="new-password"><div class="system-config-hint">保存后不回显；留空保留已有值。</div></div>
+                            <div class="system-config-item"><label for="cosSecretKey">SecretKey</label><input type="password" id="cosSecretKey" autocomplete="new-password"><div class="system-config-hint">保存后不回显；留空保留已有值。</div></div>
+                            <div class="system-config-item"><label for="cosBucket">存储桶名称</label><input type="text" id="cosBucket" placeholder="my-tv-1250000000"></div>
+                            <div class="system-config-item"><label for="cosRegion">存储桶地域</label><input type="text" id="cosRegion" placeholder="ap-shanghai"></div>
+                            <div class="system-config-item"><label for="cosKey">文件路径</label><input type="text" id="cosKey" placeholder="iptv.m3u"><div class="system-config-hint">保持路径不变，电视订阅地址就不变。避免与其他上传任务使用同一路径。</div></div>
+                            <div class="system-config-item"><label for="cosPublicBaseUrl">IPTV 服务器公网地址</label><input type="text" id="cosPublicBaseUrl" placeholder="http://你的公网IP:1905"><div class="system-config-hint">填写完整协议和端口，不是 COS 地址，不含访问密码或目录。IP 变化后手动更新这里。</div></div>
+                            <div class="system-config-item"><label for="cosProfile">配置档 ID</label><input type="text" id="cosProfile" placeholder="留空使用默认档"><div class="system-config-hint">沿用该档的排序、分组和隐藏设置。</div></div>
+                            <div class="system-config-item"><label for="cosRelay">订阅模式</label><select id="cosRelay"><option value="">标准版</option><option value="1">兼容版</option><option value="2">全代理版</option></select></div>
+                            <div class="system-config-item"><label class="sys-check-label" for="cosEnabled"><input type="checkbox" id="cosEnabled">启用定时上传</label><div class="system-config-hint">保存即生效，无需额外设置系统计划任务。服务运行期间按间隔上传已有频道列表。</div></div>
+                            <div class="system-config-item"><label for="cosIntervalMinutes">上传间隔（分钟）</label><input type="number" id="cosIntervalMinutes" min="1" max="10080" value="10"></div>
+                        </div>
+                        <div class="system-config-actions" style="margin-top:20px;justify-content:flex-start;">
+                            <button class="btn btn-success" id="cosSaveBtn" onclick="saveCosConfig(false)">保存配置</button>
+                            <button class="btn btn-primary" id="cosUploadBtn" onclick="saveCosConfig(true)">保存并立即上传</button>
+                        </div>
+                        </fieldset>
+                        <div id="cosStatus" class="system-config-hint" role="status" aria-live="polite" style="white-space:pre-line;margin-top:16px;">正在加载配置…</div>
+                        <div class="system-config-item" style="margin-top:16px;"><label for="cosUrl">电视订阅地址</label><input type="text" id="cosUrl" readonly placeholder="保存存储桶和文件路径后显示"><button class="btn btn-sm" style="margin-top:8px;" onclick="copyCosUrl()">复制订阅地址</button></div>
+                        <div class="system-config-hint">请在 COS 控制台为目标文件配置读取权限（例如该对象公有读）。文件内包含本服务的播放访问凭据，请妥善保管订阅地址。上传配置单独保存在数据目录 cos-config.json，换机时需单独迁移；本页不会读取旧的 cos.env 配置。</div>
+                    </section>
                 </div>
             </div>
 
@@ -5029,6 +5060,7 @@
 
         // 设置页二级标签切换（issue #72）：只做显隐，各卡片数据在进入设置页(switchTab(2))时已统一刷新
         function switchSettingsTab(index) {
+            if (index === 7) loadCosConfig();
             fitSubtabPanelHeight(document.querySelector('.settings-panel'));
             document.querySelectorAll('.settings-subtabs .mode-switch-btn').forEach((b, i) => b.classList.toggle('active', i === index));
             document.querySelectorAll('.settings-subpanel').forEach((p, i) => p.classList.toggle('active', i === index));
@@ -9654,6 +9686,89 @@ if(success){
                 document.body.removeChild(textarea);
             }
         }
+
+
+        let cosLoaded = false;
+        let cosActionBusy = false;
+        let cosPollBusy = false;
+        const cosFieldNames = ['secretId', 'secretKey', 'bucket', 'region', 'key', 'publicBaseUrl', 'profile', 'relay', 'intervalMinutes'];
+        function cosField(name) { return document.getElementById('cos' + name[0].toUpperCase() + name.slice(1)); }
+        async function cosRequest(body) {
+            const response = await fetch(`${API_PREFIX}/api/cos`, body ? {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            } : {});
+            const result = await response.json();
+            if (!result.success) throw new Error(result.message || 'COS 操作失败');
+            return result;
+        }
+        function renderCosStatus(result) {
+            const s = result.status;
+            const time = value => value ? new Date(value).toLocaleString() : '暂无';
+            document.getElementById('cosStatus').textContent = [
+                s.busy ? '正在上传…' : (s.lastError ? '最近上传失败：' + s.lastError : (s.lastSuccessAt ? '最近上传成功' : '尚未上传')),
+                '最近尝试：' + time(s.lastAttemptAt),
+                '最近成功：' + time(s.lastSuccessAt),
+                '下次定时上传：' + (result.config.enabled ? time(s.nextRunAt) : '未开启')
+            ].join('\n');
+            document.getElementById('cosUrl').value = result.url;
+            document.getElementById('cosFields').disabled = cosActionBusy || s.busy;
+        }
+        async function loadCosConfig() {
+            if (cosPollBusy) return;
+            cosPollBusy = true;
+            try {
+                const result = await cosRequest();
+                if (!cosLoaded) {
+                    for (const name of cosFieldNames) {
+                        cosField(name).value = name.startsWith('secret') ? '' : result.config[name];
+                    }
+                    cosField('enabled').checked = result.config.enabled;
+                    cosLoaded = true;
+                }
+                cosField('secretId').placeholder = result.config.hasSecretId ? '已保存，留空保持不变' : '填写 SecretId';
+                cosField('secretKey').placeholder = result.config.hasSecretKey ? '已保存，留空保持不变' : '填写 SecretKey';
+                renderCosStatus(result);
+            } catch (error) {
+                document.getElementById('cosStatus').textContent = '加载失败：' + error.message;
+            } finally { cosPollBusy = false; }
+        }
+        async function saveCosConfig(uploadNow) {
+            if (cosActionBusy || !cosLoaded) return;
+            cosActionBusy = true;
+            document.getElementById('cosFields').disabled = true;
+            try {
+                const config = Object.fromEntries(cosFieldNames.map(name => [name, name === 'intervalMinutes' ? Number(cosField(name).value) : cosField(name).value.trim()]));
+                config.enabled = cosField('enabled').checked;
+                const saved = await cosRequest({ action: 'save', config });
+                cosField('secretId').value = '';
+                cosField('secretKey').value = '';
+                renderCosStatus(saved);
+                if (uploadNow) {
+                    document.getElementById('cosStatus').textContent = '正在上传…';
+                    renderCosStatus(await cosRequest({ action: 'upload' }));
+                }
+                showStatus(uploadNow ? 'COS 上传成功' : 'COS 配置已保存', 'success');
+            } catch (error) {
+                document.getElementById('cosStatus').textContent = error.message;
+                showStatus(error.message, 'error');
+            } finally {
+                cosActionBusy = false;
+                document.getElementById('cosFields').disabled = false;
+                await loadCosConfig();
+            }
+        }
+        async function copyCosUrl() {
+            const field = document.getElementById('cosUrl');
+            if (!field.value) return showStatus('请先保存 COS 配置', 'error');
+            try {
+                if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(field.value);
+                else { field.select(); if (!document.execCommand('copy')) throw new Error('copy'); }
+                showStatus('订阅地址已复制', 'success');
+            } catch { showStatus('请选中订阅地址手动复制', 'error'); }
+        }
+        setInterval(() => {
+            if (document.getElementById('settingsSub7').classList.contains('active') && document.querySelector('.settings-panel').classList.contains('active') && !cosActionBusy) loadCosConfig();
+        }, 5000);
 
         // 保存系统配置
         /**

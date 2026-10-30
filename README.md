@@ -603,6 +603,8 @@ node app.js
 
 ---
 
+需要将生成的 M3U 同步到腾讯云 COS，让电视长期使用固定订阅地址，参见 [COS 同步配置](COS.md)。
+
 ## 更新日志
 
 每个版本改了什么见 [CHANGELOG.md](CHANGELOG.md)，也可以在 [GitHub Releases](https://github.com/akiralereal/iptv/releases) 查看；最新一版的内容在页面顶部「当前版本更新内容」。

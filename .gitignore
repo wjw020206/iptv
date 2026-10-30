@@ -1,4 +1,10 @@
 node_modules
+cos.env
+.cos-sync.lock
+cos-sync.log
+cos-config.json
+cos-config.json.tmp
+cos-state.json
 # package-lock.json  # 不应该忽略 lock 文件，它能锁定依赖版本加速构建
 
 # 备份文件

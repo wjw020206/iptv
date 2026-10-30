@@ -29,6 +29,7 @@ import { userManager } from "./utils/userManager.js";
 import { getUsersAPI, addUserAPI, updateUserAPI, removeUserAPI, regenUserTokenAPI } from "./utils/usersAPI.js";
 import { getAlertsAPI, getAlertTracker, postAlertsAPI } from "./utils/alerts.js";
 import { getNotifyAPI, postNotifyAPI, getNotifier } from "./utils/notify.js";
+import { cosSync } from "./utils/cosSync.js";
 import { getAliasesAPI, setAliasRuleAPI, removeAliasRuleAPI } from "./utils/aliasesAPI.js";
 import { getGroupRulesAPI, setGroupRuleAPI, removeGroupRuleAPI, moveGroupRuleAPI } from "./utils/groupRulesAPI.js";
 import { getSystemConfigAPI, saveSystemConfigAPI } from "./utils/systemConfigAPI.js";
@@ -382,6 +383,23 @@ async function handleRequest(req, res) {
       printGreen(`API: 返回 ${result.success ? result.data.length : 0} 个分组`)
       res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8' });
       res.end(JSON.stringify(result.success ? result.data : []));
+      return
+    }
+
+    if (routePath === '/api/cos' && (method === 'GET' || method === 'POST')) {
+      try {
+        if (method === 'POST') {
+          const data = JSON.parse(await readBody(req))
+          if (data.action === 'save') cosSync.save(data.config)
+          else if (data.action === 'upload') await cosSync.run()
+          else throw new Error('未知 COS 操作')
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify({ success: true, ...cosSync.view() }))
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json;charset=UTF-8', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify({ success: false, message: error.message }))
+      }
       return
     }
 
@@ -1551,6 +1569,7 @@ let shutdownTask = null
 function shutdownProcess() {
   if (shutdownTask) return shutdownTask
   shutdownTask = (async () => {
+    cosSync.stop()
     // 先停止接收新连接，再释放专用 Chrome profile；清理最多等 8 秒，不能让
     // 守护进程的重启因为浏览器异常关闭而无限挂住。
     try { server.close() } catch { /* 尚未监听或已经关闭 */ }
@@ -1590,6 +1609,8 @@ process.on('uncaughtException', (err) => {
 })
 
 server.listen(port, async () => {
+  cosSync.getPort = () => server.address().port
+  cosSync.start()
   const updateInterval = parseInt(programInfoUpdateInterval)
 
   // 用户令牌用量（最近访问 / 次数）节流落盘：内存累加，每 60 秒 flush 一次，避免每请求写磁盘
