@@ -9525,37 +9525,25 @@
             }, 800);
         }
 
-        // 上一条提示的隐藏定时器。必须记下来并在下一条到来时清掉：
-        // 原实现每次都另起一个 3 秒定时器却不撤销旧的，于是「先弹 A、1 秒后弹 B」时，
-        // A 的定时器会在第 3 秒把还没读完的 B 一起掐掉。
+        // 新提示出现时撤销上一条的隐藏定时器，统一停留 800ms。
         let statusHideTimer = null;
 
-        /**
-         * @param {string} message 提示文案
-         * @param {string} type    success / error / info
-         * @param {number} ms      停留时长，默认 3 秒。需要用户**记下内容**的提示要给足时间
-         *                         ——比如「访问入口已变更为 /xxx/admin」，它后面跟着一次跳转，
-         *                         提示比跳转先消失的话，这句话等于没说。
-         */
-        /** ms <= 0 表示不自动隐藏（页面已经没法用了、必须让用户看到的那种提示）。 */
-        function showStatus(message, type, ms = 3000) {
+        /** 操作提示（success / error / info）统一在 800ms 后收起。 */
+        function showStatus(message, type) {
             if (type === 'error') statusErrorSeq++;   // 供 toastSaved 判定「期间出过错」
             const status = document.getElementById('status');
             status.textContent = message;
             status.className = 'status ' + type;
 
-            // 触发动画
             setTimeout(() => {
                 status.classList.add('show');
             }, 10);
 
             if (statusHideTimer) clearTimeout(statusHideTimer);
-            if (ms > 0) {
-                statusHideTimer = setTimeout(() => {
-                    statusHideTimer = null;
-                    status.classList.remove('show');
-                }, ms);
-            }
+            statusHideTimer = setTimeout(() => {
+                statusHideTimer = null;
+                status.classList.remove('show');
+            }, 800);
         }
 
         // 渲染系统配置
@@ -10035,9 +10023,7 @@ if(success){
                             // 地址明文写进提示并停 5 秒（比原来的 3 秒长）：密码里若有需要 URL 编码的
                             // 字符，浏览器编码后与服务端的原样比对对不上，跳过去会是 404 —— 那时
                             // 用户至少看得见正确地址、能自己敲。服务端不清洗 pass，这个口子暂时堵不上。
-                            // 6 秒 > 下面的 5 秒跳转：提示必须活到跳转发生，否则用户记不下地址。
-                            // 这句话是「服务端不清洗 pass、密码含特殊字符时跳过去可能 404」的唯一补偿。
-                            showStatus(`访问入口已变更，5 秒后跳转到：${entry}　（若跳转后打不开，请手动访问该地址）`, 'success', 6000);
+                            showStatus(`访问入口已变更，5 秒后跳转到：${entry}　（若跳转后打不开，请手动访问该地址）`, 'success');
                             setTimeout(() => { window.location.href = window.location.origin + entry; }, 5000);
                         }
                         return { entry, apiPrefix, portChanged };
@@ -10281,17 +10267,17 @@ if(success){
                     if (portChanged) {
                         // 端口改了：地址栏里的端口未必等于服务监听的端口，我们算不出正确地址。
                         // 与其跳到一个死地址（旧端口已关）或坑到 Docker 用户（宿主端口没变），
-                        // 不如把已知的部分说清楚、让用户自己敲。提示留 60 秒，够看清也够复制。
+                        // 不如把已知的部分说清楚、让用户自己敲。提示时长沿用统一的 800ms。
                         showStatus(
                             `服务重启中...服务端口已改为 ${document.getElementById('sysPort').value}，`
                             + `请手动访问新地址（路径部分为 ${redirectTo || window.location.pathname}）。`
                             + `Docker 部署还需同步修改端口映射，否则会连不上。`,
-                            'success', 60000);
+                            'success');
                         return;   // 不自动跳转
                     }
                     showStatus(redirectTo
                         ? `服务重启中...回来后会自动跳到新入口 ${redirectTo}`
-                        : '服务重启中...正在等待服务恢复', 'success', 0);
+                        : '服务重启中...正在等待服务恢复', 'success');
 
                     // 探活而不是盲等：服务没被拉起来时，与其把用户送到一个打不开的页面，
                     // 不如告诉他发生了什么、该怎么办（见 waitForServerBack 的注释）。
@@ -10306,7 +10292,7 @@ if(success){
                         + '· Docker / pm2 / systemd 部署：守护进程通常会拉起，可稍等片刻再刷新本页；\n'
                         + '· 直接用 node app.js 运行：没有守护进程，需要回到终端手动重新启动。\n\n'
                         + '（「重启服务」的实现是让进程退出、由外部守护进程拉起）',
-                        'error', 0);
+                        'error');
                 } else {
                     showStatus(result.message || '重启失败', 'error');
                 }
@@ -13536,7 +13522,7 @@ if(success){
                     // 内置订阅（精选频道）在「源管理」里不露面，没有可跳转的卡片。
                     // 它是随程序自带、由维护者策展的内容，本来就不打算让用户编辑。
                     switchSourceTab(2, false);
-                    showStatus('该频道来自内置订阅源（随程序自带，不可编辑）。如需整体关闭，请到「源管理 → 内置源」', 'error', 6000);
+                    showStatus('该频道来自内置订阅源（随程序自带，不可编辑）。如需整体关闭，请到「源管理 → 内置源」', 'error');
                 } else if (foundIndex !== -1) {
                     // 展开该源（selectExternalSource 是「一律展开」语义，不会 toggle）
                     selectExternalSource(foundIndex);
