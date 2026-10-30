@@ -29,6 +29,7 @@ import { userManager } from "./utils/userManager.js";
 import { getUsersAPI, addUserAPI, updateUserAPI, removeUserAPI, regenUserTokenAPI } from "./utils/usersAPI.js";
 import { getAlertsAPI, getAlertTracker, postAlertsAPI } from "./utils/alerts.js";
 import { getNotifyAPI, postNotifyAPI, getNotifier } from "./utils/notify.js";
+import { mergeChannelGroups } from './utils/multiLinePlaylist.js';
 import { cosSync } from "./utils/cosSync.js";
 import { getAliasesAPI, setAliasRuleAPI, removeAliasRuleAPI } from "./utils/aliasesAPI.js";
 import { getGroupRulesAPI, setGroupRuleAPI, removeGroupRuleAPI, moveGroupRuleAPI } from "./utils/groupRulesAPI.js";
@@ -922,6 +923,8 @@ async function handleRequest(req, res) {
         res.end(JSON.stringify({
           success: true,
           data: result,
+          mergedData: config.mergeLines === true ? mergeChannelGroups(result) : null,
+          mergeLines: config.mergeLines === true,
           originalData: groups  // 原始未过滤的数据
         }));
         printGreen(`API: 返回 ${result.length} 个分组（原始: ${groups.length} 个）`)
@@ -997,6 +1000,7 @@ async function handleRequest(req, res) {
       try {
         const body = await readBody(req)
         const config = JSON.parse(body)
+        if (Object.hasOwn(config, 'mergeLines') && typeof config.mergeLines !== 'boolean') throw new Error('同名频道合并开关必须是布尔值')
         // 只允许写「默认档」或已注册的配置档，避免任意 ?profile= 制造孤儿配置文件
         if (profileParam && profileParam !== 'default' && !listProfiles().some(p => p.id === profileParam)) {
           res.writeHead(400, { 'Content-Type': 'application/json;charset=UTF-8' });
@@ -1408,7 +1412,9 @@ async function handleRequest(req, res) {
     // 订阅拉取留痕（issue #98）：核心排查判据是「播放器拉订阅时带没带 ?relay=、是谁在拉」，
     // 此前这里零日志，App 二次拉订阅丢参数的场景完全无痕
     printGrey(`订阅拉取: ${method} ${routeUrlPath}${relayParam ? `?relay=${relayParam}` : '（无 relay 参数）'}｜${clientOf(req).tag}`)
-    const interfaceObj = interfaceStr(routeUrlPath, headers, urlUserId, urlToken, effectiveProfile, accessPrefix, relayParam)
+    const mergeParam = new URLSearchParams(routeUrl.split('?')[1] || '').get('mergeLines')
+    const mergeLinesOverride = mergeParam === '1' ? true : mergeParam === '0' ? false : undefined
+    const interfaceObj = interfaceStr(routeUrlPath, headers, urlUserId, urlToken, effectiveProfile, accessPrefix, relayParam, mergeLinesOverride)
     if (interfaceObj.content == null) {
       interfaceObj.content = "获取失败"
     }

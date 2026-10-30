@@ -120,6 +120,7 @@ function configPath(profile) {
  * 默认配置
  */
 const DEFAULT_CONFIG = {
+  mergeLines: false,        // 本配置档的后台视图及 M3U 订阅合并同名频道为多线路
   channelGroupMap: {},      // 单频道归类： "原始分组::频道ID" → 目标分组名
   channelRenameMap: {},     // 单频道重命名： "原始分组::频道ID" → 新显示名
   channelOrder: {},         // 组内频道顺序： 显示分组名 → ["原始分组::频道ID", ...]

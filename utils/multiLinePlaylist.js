@@ -1,5 +1,31 @@
 // 部分播放器支持的扩展格式：一条 EXTINF 后连续写多条地址。
-// 只用于显式开启的 COS 导出；不改变内部频道模型和标准订阅。
+// 显式开启的配置档订阅及 COS 导出共用；保留各来源的内部频道身份。
+import { renderOpts, omitPlayerOnlyOpts } from './channelOpts.js'
+
+function lineKey(name, directives) {
+  return JSON.stringify([String(name).trim().normalize('NFKC').toLowerCase(), directives])
+}
+
+/** 后台合并视图保留每条来源记录，编辑操作仍按原始频道身份执行。 */
+export function mergeChannelGroups(groups) {
+  const output = groups.map(group => ({ ...group, channels: [] }))
+  const byName = new Map()
+  groups.forEach((group, index) => {
+    for (const channel of group.channels) {
+      const directives = omitPlayerOnlyOpts(`#EXTINF:-1,channel\n${renderOpts(channel.opts)}${channel.url}\n`).split('\n').filter(line => line.startsWith('#EXTVLCOPT:'))
+      const key = lineKey(channel.name, directives)
+      let merged = byName.get(key)
+      if (!merged) {
+        merged = { ...channel, lines: [] }
+        byName.set(key, merged)
+        output[index].channels.push(merged)
+      }
+      merged.lines.push({ ...channel, groupName: group.name })
+      merged.lineCount = new Set(merged.lines.map(line => line.url)).size
+    }
+  })
+  return output
+}
 function separator(line) {
   let quoted = false
   for (let i = 0; i < line.length; i++) {
@@ -37,7 +63,7 @@ export function mergePlaylistLines(content) {
     const urls = entry.lines.filter(line => !line.startsWith('#'))
     if (!urls.length) throw new Error('多线路合并失败：频道缺少播放地址')
     // 不把不同 UA/Referer 等配置共用到另一路：这类条目保留独立输出。
-    const key = JSON.stringify([name.normalize('NFKC').toLowerCase(), directives])
+    const key = lineKey(name, directives)
     const attrs = { ...defaults, ...catchupAttrs(entry.header.slice(0, comma)) }
     const catchup = JSON.stringify(['catchup', 'catchup-days', 'catchup-source'].map(key => attrs[key] || ''))
     let merged = byName.get(key)

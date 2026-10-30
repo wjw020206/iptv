@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mergePlaylistLines } from '../utils/multiLinePlaylist.js'
+import { mergePlaylistLines, mergeChannelGroups } from '../utils/multiLinePlaylist.js'
 
 const header = '#EXTM3U x-tvg-url="https://tv.example/epg.xml" catchup="append" catchup-source="?begin={utc}"'
 const input = `${header}
@@ -44,3 +44,21 @@ assert.ok(withOpts.includes('https://b.example/\nhttps://cdn.example/b.m3u8'))
 assert.throws(() => mergePlaylistLines('#EXTM3U\n#EXTINF:-1,测试\n'), /缺少播放地址/)
 assert.throws(() => mergePlaylistLines('#EXTM3U\n#EXTINF:-1,\nhttps://a.example/live\n'), /缺少显示名称/)
 console.log('多线路合并测试通过：跨组同名、顺序、去重、4K 区分、逗号属性、请求头隔离、回看差异和重复转换')
+
+const groups = [
+  { name: '央视', channels: [{ id: 'migu1', name: 'CCTV1综合', url: 'https://cdn/one', originalGroup: '央视' }, { id: '16', name: 'CCTV16', url: 'https://cdn/16' }] },
+  { name: '央视频', channels: [{ id: 'ysp1', name: 'CCTV1综合', url: 'https://cdn/two', originalGroup: '央视频' }, { id: '4k', name: 'CCTV16 4K', url: 'https://cdn/4k' }] },
+]
+const before = JSON.stringify(groups)
+const merged = mergeChannelGroups(groups)
+assert.equal(merged[0].channels[0].lineCount, 2)
+assert.deepEqual(merged[0].channels[0].lines.map(line => line.id), ['migu1', 'ysp1'])
+assert.equal(merged[0].channels[0].lines[1].groupName, '央视频')
+assert.equal(merged[1].channels.length, 1)
+assert.equal(merged[1].channels[0].name, 'CCTV16 4K')
+assert.equal(JSON.stringify(groups), before, '合并视图不得修改原始编辑数据')
+const isolated = mergeChannelGroups([{ name: 'test', channels: [
+  { id: 'a', name: 'A', url: 'https://cdn/a', opts: ['http-referrer=https://one'] },
+  { id: 'b', name: 'A', url: 'https://cdn/b', opts: ['http-referrer=https://two'] },
+] }])
+assert.equal(isolated[0].channels.length, 2)

@@ -1,3 +1,4 @@
+import { mergePlaylistLines } from './multiLinePlaylist.js';
 import { readFileSync } from "./fileUtil.js";
 import { dataPath } from "./paths.js";
 import { host, pass, enableTvgNormalize, enableDisplayNameUnify } from "../config.js";
@@ -155,7 +156,7 @@ async function fetchManifestDirect(playURL, upstreamHeaders = {}, diag = {}) {
   }
 }
 
-function interfaceStr(url, headers, urlUserId, urlToken, profile, accessPrefix, relay) {
+function interfaceStr(url, headers, urlUserId, urlToken, profile, accessPrefix, relay, mergeLinesOverride) {
 
   let result = {
     content: null,
@@ -196,10 +197,12 @@ function interfaceStr(url, headers, urlUserId, urlToken, profile, accessPrefix, 
     return result
   }
   
+  let mergeLines = mergeLinesOverride === true
   // 对于播放列表，应用用户配置
   if (url === "/" || url === "/m3u" || url === "/interface.m3u" || url === "/interface.txt" || url === "/txt") {
     try {
       const config = readConfig(profile)
+      mergeLines = mergeLinesOverride ?? (config.mergeLines === true)
 
       // 只有存在任意自定义配置时才应用（避免首次访问解析失败）
       // 注意：旧写法 `config.channelGroupMap` 恒真（{} 也为真），会导致始终套用配置；
@@ -313,7 +316,10 @@ function interfaceStr(url, headers, urlUserId, urlToken, profile, accessPrefix, 
   result.content = `${result.content}`.replaceAll("${replace}", replaceHost).replace(/ source-ids="[^"\s]*"/g, "");
 
   // 原始缓存直出和配置档重生成都在这里处理；TXT 没有 M3U 选项，EPG 已提前返回。
-  if (url !== '/txt') result.content = omitPlayerOnlyOpts(result.content)
+  if (url !== '/txt') {
+    result.content = omitPlayerOnlyOpts(result.content)
+    if (mergeLines && /^#EXTINF:/m.test(result.content)) result.content = mergePlaylistLines(result.content)
+  }
 
   return result
 }

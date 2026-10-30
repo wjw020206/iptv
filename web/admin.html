@@ -4482,6 +4482,8 @@
                             <div class="my-playlist-actions" style="flex-wrap: wrap; align-items: center;">
                                 <span style="font-size: 14px; color: #333;">当前档：<strong id="currentProfileLabel">默认</strong></span>
                                 <button class="btn btn-primary" onclick="openProfileModal()" title="管理多套配置档：切换 / 新建 / 改名 / 删除 / 重置">编辑</button>
+                                <label class="sys-check-label" for="playlistMergeLines"><input type="checkbox" id="playlistMergeLines" onchange="togglePlaylistMerge(this.checked)">同名频道合并</label>
+                                <button class="btn" id="playlistLineEditor" onclick="togglePlaylistLineEditor()" hidden>合并视图</button>
                                 <button class="btn" onclick="openHiddenRuleModal()" title="按名字长期屏蔽频道：源换地址、频道每天重建都照样生效">🚫 屏蔽规则</button>
                                 <button class="btn" onclick="openMissingLogoModal()" title="列出当前档里没有台标的频道，点进去就能上传">缺台标</button>
                             </div>
@@ -10691,6 +10693,94 @@ if(success){
             }
         }
 
+        let myPlaylistMergedData = [];
+        let myPlaylistMergeEnabled = false;
+        let playlistLineEditing = true;
+        let playlistMergeSaving = false;
+        function mergedPlaylistView() { return myPlaylistMergeEnabled && !playlistLineEditing; }
+        function togglePlaylistLineEditor() {
+            playlistLineEditing = !playlistLineEditing;
+            isBatchMode = false;
+            selectedChannels.clear();
+            renderMyPlaylist();
+        }
+        async function togglePlaylistMerge(enabled) {
+            if (!myPlaylistConfigLoaded || playlistMergeSaving) return;
+            playlistMergeSaving = true;
+            const profile = activeProfile;
+            const previous = myPlaylistConfig.mergeLines === true;
+            myPlaylistConfig.mergeLines = enabled;
+            document.getElementById('playlistMergeLines').disabled = true;
+            try {
+                const result = await saveMyPlaylist();
+                if (!result.success) {
+                    if (activeProfile === profile) myPlaylistConfig.mergeLines = previous;
+                    return;
+                }
+                if (activeProfile === profile) {
+                    playlistLineEditing = true;
+                    isBatchMode = false;
+                    selectedChannels.clear();
+                    await loadMyPlaylist(false);
+                }
+            } finally {
+                playlistMergeSaving = false;
+                renderMyPlaylist();
+            }
+        }
+        function renderMergedPlaylistDetail(container, header, title, actions) {
+            header.style.display = 'flex';
+            actions.replaceChildren();
+            const note = document.createElement('span');
+            note.className = 'system-config-hint';
+            note.textContent = '同名频道采用首条的分组和台标；展开查看各线路。排序、批量管理请切换「逐线路编辑」。';
+            actions.append(note);
+            const groups = channelSearchQuery ? myPlaylistMergedData : [myPlaylistMergedData[selectedGroupIndex]].filter(Boolean);
+            const matches = groups.flatMap(group => group.channels.filter(channel => !channelSearchQuery || channelSearchKey(channel.name).includes(channelSearchKey(channelSearchQuery))).map(channel => ({ group, channel })));
+            title.textContent = channelSearchQuery ? `搜索结果 (${matches.length}个频道)` : `${groups[0]?.name || '频道'} (${matches.length}个频道)`;
+            container.replaceChildren();
+            if (!matches.length) {
+                const empty = document.createElement('div');
+                empty.className = 'system-config-hint';
+                empty.textContent = '暂无频道；同名频道会归入第一条线路所在的分组。';
+                container.append(empty);
+            }
+            for (const { group, channel } of matches) {
+                const details = document.createElement('details');
+                details.className = 'sys-section playlist-merged-channel';
+                details.style.cssText = 'margin:0 0 12px;padding:14px;overflow-wrap:anywhere;';
+                const summary = document.createElement('summary');
+                summary.style.cursor = 'pointer';
+                summary.textContent = `${channel.name} · ${channel.lineCount} 条线路${channelSearchQuery ? ' · ' + group.name : ''}`;
+                details.append(summary);
+                for (const [index, line] of channel.lines.entries()) {
+                    const row = document.createElement('div');
+                    row.style.marginTop = '12px';
+                    const label = document.createElement('div');
+                    label.className = 'system-config-hint';
+                    label.textContent = `${index + 1}. ${line.groupName} · ${sourceNamesFor(line).join('、') || '频道来源'} · ${line.name}`;
+                    row.append(label);
+                    const buttons = document.createElement('div');
+                    buttons.className = 'channel-detail-buttons';
+                    const edit = document.createElement('button');
+                    edit.className = 'btn btn-sm';
+                    edit.textContent = '查看 / 编辑线路';
+                    edit.onclick = () => showChannelDetail(line.id, false);
+                    buttons.append(edit);
+                    if (line.url) {
+                        const play = document.createElement('button');
+                        play.className = 'btn btn-sm';
+                        play.textContent = '播放';
+                        play.onclick = () => playInlineById(line.id);
+                        buttons.append(play);
+                    }
+                    row.append(buttons);
+                    details.append(row);
+                }
+                container.append(details);
+            }
+        }
+
         async function loadMyPlaylist(resetView = true) {
             try {
                 const response = await fetch(mpListUrl());
@@ -10699,6 +10789,9 @@ if(success){
                 
                 if (result.success) {
                     myPlaylistData = result.data;
+                    myPlaylistMergedData = result.mergedData || result.data;
+                    myPlaylistMergeEnabled = result.mergeLines === true;
+                    if (resetView) playlistLineEditing = true;
                     
                     // 使用API返回的原始数据
                     if (result.originalData && result.originalData.length > 0) {
@@ -10732,6 +10825,8 @@ if(success){
                 if (result.success) {
                     myPlaylistConfig = result.data;
                     myPlaylistConfigLoaded = true;
+                    const mergeInput = document.getElementById('playlistMergeLines');
+                    if (mergeInput) mergeInput.disabled = playlistMergeSaving;
                 }
             } catch (error) {
                 console.error('加载配置失败:', error);
@@ -10821,6 +10916,17 @@ if(success){
         }
 
         function renderMyPlaylist() {
+            const mergeInput = document.getElementById('playlistMergeLines');
+            mergeInput.checked = myPlaylistMergeEnabled;
+            mergeInput.disabled = !myPlaylistConfigLoaded || playlistMergeSaving;
+            const lineEditor = document.getElementById('playlistLineEditor');
+            lineEditor.hidden = !myPlaylistMergeEnabled;
+            lineEditor.style.display = myPlaylistMergeEnabled ? '' : 'none';
+            lineEditor.textContent = playlistLineEditing ? '合并视图' : '逐线路编辑';
+            if (mergedPlaylistView() && !isViewingDeleted && !myPlaylistMergedData[selectedGroupIndex]?.channels.length) {
+                const first = myPlaylistMergedData.findIndex(group => group.channels.length > 0);
+                if (first >= 0) selectedGroupIndex = first;
+            }
             renderSubscribeBar();   // 默认档用户不触发 renderProfileUI，这里兜底渲染订阅地址栏（issue #38）
             renderGroupLists();
             renderGroupDetail();
@@ -10831,7 +10937,7 @@ if(success){
         function updateMyChannelTotal() {
             const el = document.getElementById('myChannelTotal');
             if (!el) return;
-            const total = myPlaylistData.reduce((sum, g) => sum + (g.channels ? g.channels.length : 0), 0);
+            const total = (mergedPlaylistView() ? myPlaylistMergedData : myPlaylistData).reduce((sum, g) => sum + (g.channels ? g.channels.length : 0), 0);
             el.textContent = `（共 ${total} 个频道）`;
         }
 
@@ -10844,12 +10950,14 @@ if(success){
                 activeList.innerHTML = '<div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">暂无频道</div>';
             } else {
                 activeList.innerHTML = myPlaylistData.map((group, originalIndex) => {
+                    const count = mergedPlaylistView() ? (myPlaylistMergedData[originalIndex]?.channels.length || 0) : group.channels.length;
+                    if (mergedPlaylistView() && !count) return '';
                     const mergedCount = mergedSourceGroupCount(group);
                     return `
                     <div class="my-playlist-group-item ${!channelSearchQuery && !isViewingDeleted && selectedGroupIndex === originalIndex ? 'active' : ''}"
                          onclick="selectGroup(${originalIndex}, false)">
                         <span>${group.name}${mergedCount ? ` <span style="color:#faad14;" title="和订阅源里的同名分组合并显示了，点开看详情">⚠</span>` : ''}</span>
-                        <span style="color: #999; font-size: 12px;">${group.channels.length}</span>
+                        <span style="color: #999; font-size: 12px;">${count}</span>
                     </div>
                 `;
                 }).join('');
@@ -11250,6 +11358,11 @@ if(success){
             // 搜索结果和空视图不显示配对图例，选中普通分组后再展开。
             const legend = document.querySelector('.my-playlist-middle .ch-status-legend');
             if (legend) legend.style.display = 'none';
+
+            if (mergedPlaylistView() && !isViewingDeleted) {
+                renderMergedPlaylistDetail(container, header, title, actions);
+                return;
+            }
 
             if (channelSearchQuery) {
                 // 搜索分支放在这里而不是输入事件里：隐藏、改名、切源等几十处保存后都会重渲染本区域，
@@ -12103,8 +12216,11 @@ if(success){
 
         // 系统公告频道也走这里：它可隐藏（issue #119），只是不能删除、移动、重命名
         async function hideChannel(channelId) {
-            const group = myPlaylistData[selectedGroupIndex];
-            const channel = group?.channels.find(c => c.id === channelId);
+            const selected = myPlaylistData[selectedGroupIndex];
+            const group = selected?.channels.some(channel => channel.id === channelId) ? selected
+                : myPlaylistData.find(group => group.channels.some(channel => channel.id === channelId));
+            if (!group) return showStatus('频道未找到', 'error');
+            const channel = group.channels.find(c => c.id === channelId);
             const originalGroupName = channelOriginalGroupName(channel, group.name);
             const hiddenKey = `${originalGroupName}::${channelId}`;
             if (!myPlaylistConfig.hiddenChannels.includes(hiddenKey)) {
