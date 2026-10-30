@@ -8,7 +8,7 @@ env:
   IMAGE: akiralereal/iptv
 jobs:
   # 每个平台单独一个 job 并行构建，只按 digest 推送（不打标签），全部成功后由 merge 合成多架构清单再打标签。
-  # arm64 放原生 arm runner：以前在 amd64 上走 QEMU 模拟时，arm64 的 npm ci 时常无输出卡死（历次取消重跑都卡在这一步）。
+  # arm64 放原生 arm runner，避免依赖安装在 QEMU 模拟下长时间无响应。
   # arm/v7、arm/v6 仍在 amd64 上走 QEMU：GitHub 的 arm64 机器不保证能原生跑 32 位，这两个平台也从没卡过。
   build:
     name: build ${{ matrix.platform }}
@@ -48,7 +48,7 @@ jobs:
           platforms: arm
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-      # 不配构建缓存：每次发版 package.json 版本号都变，npm ci 及之后各层必然重建，
+      # 不配构建缓存：每次发版 package.json 版本号都变，依赖安装及之后各层必然重建，
       # 原先的 registry 缓存实际只命中 WORKDIR，反而每次多花 ~25 秒导出
       - name: Build and push by digest
         id: build

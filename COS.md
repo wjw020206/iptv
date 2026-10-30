@@ -44,7 +44,7 @@ docker buildx build --platform linux/amd64 -t iptv:cos --load .
 docker save iptv:cos | gzip > iptv-cos.tar.gz
 ```
 
-如果服务器是 ARM64，将平台改为 `linux/arm64`。镜像构建会安装依赖和 Chromium。COS 密钥、配置和本地数据已从构建上下文排除，不会打进镜像。
+如果服务器是 ARM64，将平台改为 `linux/arm64`。镜像构建使用固定版本的 pnpm 和 `--frozen-lockfile` 安装生产依赖，pnpm 本身与 npm 包都通过阿里云 npmmirror 下载；Chromium、tini 和时区数据等系统软件通过阿里云 Alpine 镜像下载，保留基础镜像原有的 Alpine 版本及仓库分支。COS 密钥、配置和本地数据已从构建上下文排除，不会打进镜像。
 
 把 `iptv-cos.tar.gz` 上传到服务器后，进入准备存放 IPTV 数据的目录执行：
 

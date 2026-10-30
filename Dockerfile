@@ -2,26 +2,27 @@ FROM node:22-alpine
 
 WORKDIR /iptv
 
-# 先复制 package 文件并安装依赖
-COPY package*.json ./
+# 先复制依赖清单、锁文件和 pnpm 配置，源码变化时复用依赖层。
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 
 # 跳过 Puppeteer 自动下载 Chromium，使用系统的（更快更稳定）
 # 注意变量名是 PUPPETEER_SKIP_DOWNLOAD，不是 ..._SKIP_CHROMIUM_DOWNLOAD（后者 puppeteer 不认，是空操作）
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# 使用 npm ci 替代 npm install，速度更快且更可靠
-# 如果有 package-lock.json 则使用 ci，否则降级使用 install
-RUN if [ -f package-lock.json ]; then \
-      npm ci --omit=dev; \
-    else \
-      npm install --production; \
-    fi
+# Corepack 下载 pnpm 本身也使用阿里云 npmmirror；版本由 packageManager 锁定。
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+RUN corepack enable \
+  && corepack install \
+  && pnpm install --prod --frozen-lockfile \
+  && pnpm store prune
 
 # 安装 tini 作为 init 进程（PID 1）。
 # Node 作为 PID 1 时不会回收被 Chromium 退出后重新挂到它名下的子进程，
 # 会累积成僵尸(defunct)进程；tini 负责转发信号并回收这些孤儿进程。
-RUN apk add --no-cache tini
+# 保留基础镜像原有的 Alpine 版本和仓库分支，仅替换为阿里云镜像站。
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
+  && apk add --no-cache tini
 
 # 安装系统 Chromium 用于网页抓取功能（可选）
 # 注意：某些架构（如 s390x）可能没有 chromium 包，失败时跳过

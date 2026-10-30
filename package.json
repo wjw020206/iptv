@@ -3,6 +3,7 @@
   "version": "4.53.1",
   "license": "GPL-3.0-only",
   "type": "module",
+  "packageManager": "pnpm@12.16.1",
   "scripts": {
     "generate:announcement": "node scripts/generate-announcement-video.mjs",
     "generate:ysp-guide": "node scripts/generate-announcement-video.mjs ysp-login-guide",
