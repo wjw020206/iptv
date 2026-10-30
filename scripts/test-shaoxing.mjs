@@ -37,8 +37,8 @@ test('主项目默认启用、浙江分组和中继/全代理契约保持不变'
   assert.equal(shaoxing.channelHlsMode, 'relay')
   assert.equal(shaoxing.relayProxyCompatible, true)
   const { groups } = await shaoxing.fetch()
-  assert.deepEqual(groups[0].dataList.map(row => row.name), ['绍兴新闻综合', '绍兴公共', '绍兴文化影视'])
-  for (const row of groups[0].dataList) {
+  assert.deepEqual(groups[0].dataList.map(row => row.name), ['绍兴新闻综合', '绍兴公共', '绍兴文化影视', '嵊州新闻综合'])
+  for (const row of groups[0].dataList.filter(row => row.deferredRef)) {
     assert.equal(resolverFor(row.deferredRef), shaoxing)
     assert.equal(row.catchup, 'none')
     assert.match(row.logo, /^https:\/\/img\.shaoxing\.com\.cn\//)
@@ -47,6 +47,16 @@ test('主项目默认启用、浙江分组和中继/全代理契约保持不变'
   const result = await resolveChannel(channel.ref, fixture())
   assert.equal(result.url, oldUrl)
   assert.match(inlineResolvedManifest(result), /http:\/\/live\.shaoxing\.com\.cn\/video\/s10001-sxhb\/10\.ts/)
+})
+
+test('嵊州归入绍兴源，保留公开直链且不误用绍兴网节目单', async () => {
+  const { groups } = await shaoxing.fetch()
+  const shengzhou = groups[0].dataList.find(row => row.name === '嵊州新闻综合')
+  assert.equal(shengzhou.url, 'http://l.cztvcloud.com/channels/lantian/SXshengzhou1/720p.m3u8')
+  assert.equal(shengzhou.deferredRef, undefined)
+  assert.equal(shengzhou.catchup, 'none')
+  assert.ok(!shaoxing.epg.channels().some(row => row.name === shengzhou.name))
+  assert.equal(shaoxing.catalogVersion, 2, '升级已有三路缓存时应立即刷新频道目录')
 })
 
 test('从官网精确识别三套电视，允许 ID 迁移，拒绝广播、未知台和复用 ID', async () => {
