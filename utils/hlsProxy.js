@@ -93,7 +93,8 @@ function sweep() {
  */
 function register(url, pid = '', transform, upstreamHeaders, upstreamUrlTransform, upstreamFamily) {
   const family = upstreamFamily === 4 || upstreamFamily === 6 ? upstreamFamily : undefined
-  const key = 's' + createHash('md5').update(family ? `${family}:${url}` : url).digest('hex').slice(0, 16)
+  const scopedUrl = pid.startsWith('preview:') ? `${pid}:${url}` : url
+  const key = 's' + createHash('md5').update(family ? `${family}:${scopedUrl}` : scopedUrl).digest('hex').slice(0, 16)
   const targetUrl = upstreamUrlTransform ? upstreamUrlTransform(url) : url
   // 先删再插：Map 的 set 覆盖不改变迭代位置，重复登记（清单每 6 秒刷新）会让最活跃
   // 频道的 key 恒在队首，超上限淘汰时反而最先被丢。删后重插把迭代序变成「最近登记在尾」

@@ -8726,6 +8726,11 @@
                                 播放时也带上这个 UA
                             </label>
                             <div class="form-hint">勾选后，本源频道在 m3u 里都带上 <code>#EXTVLCOPT:http-user-agent</code>，需要播放器认这一行（VLC、Kodi 等）；订阅里已自带 UA 的频道保持不变。带请求头的频道 TXT 格式放不下，会从 TXT 订阅里跳过。</div>
+                            <label style="margin-top: 6px;">
+                                <input type="checkbox" ${source.previewProxy === true ? 'checked' : ''} onchange="updateExternalField(${index}, 'previewProxy', this.checked)">
+                                网页预览使用请求头代理
+                            </label>
+                            <div class="form-hint">默认关闭。开启后，网页播放由服务器携带上方 UA 及频道自带请求头获取清单和视频分片，会占用服务器视频带宽；订阅内容和电视播放方式不变。修改后点「导入并保存」。</div>
                         </div>
                         <div class="external-field">
                             <label>默认分组</label>
@@ -12915,6 +12920,8 @@ if(success){
             const actualUrl = String(channel.url).replace(/\$\{replace\}/g, baseUrl);
             const urlArg = escapeHtml(JSON.stringify(actualUrl));
             const nameArg = escapeHtml(JSON.stringify(channel.name || ''));
+            const channelArg = escapeHtml(JSON.stringify(channel.id || ''));
+            const previewArg = channel.previewProxy ? channelArg : 'null';
             const playIcon = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M3.5 2.5v11l10-5.5z"/></svg>';
             const players = includeExternalPlayers ? (PLAYERS_BY_PLATFORM[getClientPlatform()] || []) : [];
             return `
@@ -12922,7 +12929,7 @@ if(success){
                     <h4>播放地址</h4>
                     <code class="channel-detail-url">${escapeHtml(actualUrl)}</code>
                     <div class="channel-detail-buttons">
-                        <button class="btn btn-primary" onclick="playInline(${urlArg}, ${nameArg})">${playIcon}在页面里播放</button>
+                        <button class="btn btn-primary" onclick="playInline(${urlArg}, ${nameArg}, ${previewArg})">${playIcon}在页面里播放</button>
                         <button class="btn" onclick="copyToClipboard(${urlArg}, '播放地址')">复制地址</button>
                         ${players.map(p => {
                             const label = p === 'iina' ? 'IINA' : p === 'vlc' ? 'VLC' : 'PotPlayer';
@@ -13688,6 +13695,7 @@ if(success){
 
         // ===== 页面内播放（不跳新窗口）：HLS 走 hls.js（按需加载），FLV 走 mpegts.js，Safari 原生 HLS 兜底 =====
         let inlinePlayerCleanup = null;
+        let inlinePlayerRequestId = 0;
         function inlinePlayerBaseUrl() {
             return window.location.origin + window.location.pathname.replace(/\/[^/]+$/, '');
         }
@@ -13753,6 +13761,7 @@ if(success){
             return text.replace(/^\d+\s+/, '');
         }
         function closeInlinePlayer() {
+            inlinePlayerRequestId++;
             const dialog = document.getElementById('inlinePlayer');
             const video = document.getElementById('inlinePlayerVideo');
             if (inlinePlayerCleanup) { try { inlinePlayerCleanup(); } catch (e) {} inlinePlayerCleanup = null; }
@@ -13767,19 +13776,33 @@ if(success){
             const name = document.getElementById('inlinePlayerTitle').textContent;
             if (url) window.open(`${inlinePlayerBaseUrl()}/player?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`, '_blank');
         }
-        async function playInline(rawUrl, name) {
+        async function playInline(rawUrl, name, previewChannelId = null) {
             if (!rawUrl) { showStatus('该频道没有播放地址', 'error'); return; }
-            const url = browserPlaybackUrl(rawUrl.replace(/\$\{replace\}/g, inlinePlayerBaseUrl()));
+            let url = browserPlaybackUrl(rawUrl.replace(/\$\{replace\}/g, inlinePlayerBaseUrl()));
             const dialog = document.getElementById('inlinePlayer');
             const video = document.getElementById('inlinePlayerVideo');
             closeInlinePlayer();
-            dialog.dataset.url = url;
+            const requestId = inlinePlayerRequestId;
+            dialog.dataset.url = previewChannelId ? '' : url;
             document.getElementById('inlinePlayerTitle').textContent = name || '播放';
             inlinePlayerStatus('正在连接媒体…');
             dialog.showModal();
             try {
+                if (previewChannelId) {
+                    inlinePlayerStatus('正在通过服务器连接媒体（使用源配置的请求头）…');
+                    const response = await fetch(API_PREFIX + '/api/preview' + profileQuery(), {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ channelId: previewChannelId })
+                    });
+                    const result = await response.json();
+                    if (!result.success) throw new Error(result.message || '创建预览失败');
+                    if (!dialog.open || requestId !== inlinePlayerRequestId) return;
+                    url = API_PREFIX + '/api/preview/' + result.path;
+                    dialog.dataset.url = url;
+                }
                 if (/\.flv(?:[?#]|$)/i.test(url)) {
                     await loadScriptOnce('player-assets/mpegts.js', () => window.mpegts);
+                    if (!dialog.open || requestId !== inlinePlayerRequestId) return;
                     if (!mpegts.getFeatureList().mseLivePlayback) throw new Error('当前浏览器不支持 FLV 直播，请用 VLC / IINA 打开');
                     const engine = mpegts.createPlayer({ type: 'flv', isLive: true, url }, { enableWorker: false, lazyLoad: false });
                     engine.on(mpegts.Events.ERROR, (type, detail) => inlinePlayerStatus(`播放失败：${detail || type}，可尝试「新窗口打开」或用 VLC / IINA`, true));
@@ -13798,6 +13821,7 @@ if(success){
                     if (looksHls) {
                         try { await loadScriptOnce('player-assets/hls.min.js', () => window.Hls); hlsReady = !!(window.Hls && Hls.isSupported()); } catch (e) {}
                     }
+                    if (!dialog.open || requestId !== inlinePlayerRequestId) return;
                     if (hlsReady) {
                         // 央视频等来源每次刷新清单会换 CDN 节点，同一分片序号的地址随之变化；hls.js 1.6 起
                         // 把这当成清单错误，只有一个清晰度时直接放弃，十几秒后停播（issue #142）。内容是同一路
@@ -13823,13 +13847,13 @@ if(success){
                 }
                 video.play().catch(() => {});
             } catch (e) {
-                inlinePlayerStatus(e.message || String(e), true);
+                if (requestId === inlinePlayerRequestId) inlinePlayerStatus(e.message || String(e), true);
             }
         }
         function playInlineById(channelId) {
             for (const group of (myPlaylistOriginalData || [])) {
                 const found = (group.channels || []).find(ch => ch.id === channelId);
-                if (found) { playInline(found.url, found.name); return; }
+                if (found) { playInline(found.url, found.name, found.previewProxy ? found.id : null); return; }
             }
             showStatus('频道未找到', 'error');
         }
@@ -13837,7 +13861,7 @@ if(success){
             const dialog = document.getElementById('inlinePlayer');
             const video = document.getElementById('inlinePlayerVideo');
             if (!dialog || !video) return;
-            dialog.addEventListener('close', closeInlinePlayer);            // Esc 关闭时也要释放播放器
+            dialog.addEventListener('close', () => { if (!dialog.open) closeInlinePlayer(); }); // Esc 关闭时释放播放器；不关闭刚重新打开的预览
             dialog.addEventListener('click', e => { if (e.target === dialog) closeInlinePlayer(); }); // 点遮罩关闭
             video.addEventListener('playing', () => inlinePlayerStatus(''));
             video.addEventListener('error', () => { if (!inlinePlayerCleanup) inlinePlayerStatus('播放失败，可尝试「新窗口打开」或用 VLC / IINA', true); });

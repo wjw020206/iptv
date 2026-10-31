@@ -41,6 +41,7 @@ import { updateBuiltInSources, updateExternalSources, updateExtractors, external
 import { GITHUB_RAW_MIRRORS, isBuiltInSubscriptionSource } from "./utils/externalSources.js";
 import { startProbe, getProbeStatus, cancelProbe } from "./utils/sourceProbe.js";
 import { cleanUserAgent, userAgentOf } from "./utils/channelOpts.js";
+import { previewSource, previewPath, servePreview } from './utils/previewProxy.js';
 import { SYSTEM_ASSET_PATHS, readAnnouncementAsset } from "./utils/announcement.js";
 
 // 全代理/兼容模式（issue #98）的服务端可观测性。上一版的日志设计在实战里分不清三种情况
@@ -375,6 +376,27 @@ async function handleRequest(req, res) {
     if (!passAuthed) {
       res.writeHead(403, { 'Content-Type': 'application/json;charset=UTF-8' });
       res.end(JSON.stringify({ success: false, message: '未授权访问' }));
+      return
+    }
+
+    const previewMedia = routePath.match(/^\/api\/preview\/(s[0-9a-f]{16})\.([a-z0-9]{1,8})$/)
+    if (previewMedia && ['GET', 'HEAD'].includes(method)) {
+      await servePreview(req, res, previewMedia[1], previewMedia[2])
+      return
+    }
+    if (routePath === '/api/preview' && method === 'POST') {
+      try {
+        const data = JSON.parse(await readBody(req))
+        const groups = applyConfig(parseInterfaceTxt(), readConfig(profileParam))
+        const selected = groups.flatMap(group => group.channels || []).find(item => item.id === data.channelId)
+        if (!selected) throw new Error('频道不存在或已隐藏')
+        const path = previewPath(selected, externalSourceManager.sources?.sources || [])
+        res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify({ success: true, path }))
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json;charset=UTF-8' })
+        res.end(JSON.stringify({ success: false, message: error.message }))
+      }
       return
     }
 
@@ -917,6 +939,9 @@ async function handleRequest(req, res) {
       printBlue("API: 获取我的播放列表")
       try {
         const groups = parseInterfaceTxt()
+        for (const group of groups) for (const channel of group.channels || []) {
+          if (previewSource(channel, externalSourceManager.sources?.sources || [])) channel.previewProxy = true
+        }
         const config = readConfig(profileParam)
         const result = applyConfig(groups, config)
         res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8' });
