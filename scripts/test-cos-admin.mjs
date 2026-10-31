@@ -109,6 +109,17 @@ try {
   assert.equal(service.view().files.length, 2)
   assert.equal(service.view().files[1].status.lastSuccessAt, time)
   assert.ok(service.view().files[1].url.endsWith('/iptv2.m3u'))
+  const beforeSingle = calls.length
+  const firstFileState = service.view().files[0].status
+  await service.run('manual', 'iptv2.m3u')
+  assert.equal(calls.length, beforeSingle + 1, '单项上传不能触发其他文件')
+  assert.equal(calls.at(-1).COS_KEY, 'iptv2.m3u')
+  assert.deepEqual(service.view().files[0].status, firstFileState, '其他文件的上传状态保持不变')
+  assert.deepEqual(service.state().history[0].files.map(file => file.key), ['iptv2.m3u'])
+  for (const key of ['missing.m3u', '', null, 1]) {
+    await assert.rejects(service.run('manual', key), /文件不存在|请选择/)
+  }
+  assert.equal(calls.length, beforeSingle + 1, '无效选择不得退回上传全部文件')
   for (const files of [[], null, [null], [{ key: 'same.m3u' }, { key: 'same.m3u' }], [{ key: '' }], [{ key: 'bad.txt' }], [{ profile: 'missing' }], [{ mergeLines: 'true' }]]) {
     assert.throws(() => service.save({ files }))
   }

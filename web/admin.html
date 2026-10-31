@@ -2676,6 +2676,8 @@
         .my-playlist-actions { gap: 8px; }
         .my-playlist-actions > span { margin-right: 6px; color: var(--ui-text-secondary) !important; }
         .my-playlist-actions .btn { min-height: 36px; padding: 8px 13px; font-size: 13px; }
+        .my-playlist-actions .sys-check-label { display: inline-flex; align-items: center; gap: 8px; }
+        .my-playlist-actions .sys-check-label input { margin: 0; }
         .subscribe-bar {
             margin: 0;
             padding: 12px 14px;
@@ -4847,11 +4849,12 @@
                             <div class="system-config-item"><label for="cosBucket">存储桶名称</label><input type="text" id="cosBucket" placeholder="my-tv-1250000000"></div>
                             <div class="system-config-item"><label for="cosRegion">存储桶地域</label><input type="text" id="cosRegion" placeholder="ap-shanghai"></div>
                             <div class="system-config-item"><label for="cosPublicBaseUrl">IPTV 服务器公网地址</label><label class="sys-check-label" for="cosFollowServerAddress"><input type="checkbox" id="cosFollowServerAddress" onchange="updateCosAddressMode()">跟随当前后台访问地址</label><input type="text" id="cosPublicBaseUrl" placeholder="http://你的公网IP:1905"><div class="system-config-hint" id="cosAddressHint">自动使用访问后台时的协议、IP 或域名及端口，不含密码路径。取消勾选可手动指定。</div></div>
-                            <div class="system-config-item" style="grid-column:1/-1;"><label for="cosFileSelect">订阅文件</label><select id="cosFileSelect" onchange="switchCosFile(Number(this.value))"></select><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><button class="btn btn-sm" type="button" onclick="addCosFile()">新增文件</button><button class="btn btn-sm" type="button" id="cosRemoveFile" onclick="removeCosFile()">移除当前文件</button></div><div class="system-config-hint">每份文件独立选择配置档、订阅模式与合并选项。所有文件共用上面的存储桶、密钥、公网地址和下面的定时设置；每次上传会依次更新全部文件。移除配置不会删除 COS 上的文件。</div></div>
-                            <div class="system-config-item"><label for="cosKey">文件路径</label><input type="text" id="cosKey" placeholder="iptv.m3u"><div class="system-config-hint">保持路径不变，电视订阅地址就不变。各文件路径必须不同，避免互相覆盖。</div></div>
-                            <div class="system-config-item"><label for="cosProfile">当前文件的配置档</label><select id="cosProfile"></select><div class="system-config-hint">先在「我的频道」中新建不同配置档，分别设置频道、分组、排序及隐藏内容，再为各文件选择对应配置档。</div></div>
-                            <div class="system-config-item"><label for="cosRelay">订阅模式</label><select id="cosRelay"><option value="">标准版</option><option value="1">兼容版</option><option value="2">全代理版</option></select></div>
-                            <div class="system-config-item"><label class="sys-check-label" for="cosMergeLines"><input type="checkbox" id="cosMergeLines">同名频道合并为多线路</label><div class="system-config-hint">跨分组合并相同显示名，一条频道信息下连续写多条地址。采用首条的分组、台标和线路顺序，重复地址只留一条。需播放器支持该扩展格式；回看设置不一致时关闭该频道回看，请求头不同的线路保持独立。</div></div>
+                            <div class="system-config-item" style="grid-column:1/-1;">
+                                <label>配置档上传列表</label>
+                                <div class="system-config-hint">每项选择一个配置档并填写 COS 文件名，可分别上传，也可统一定时上传。修改文件名会改变电视订阅地址；移除配置不会删除 COS 上的文件。</div>
+                                <div id="cosFileRows" style="margin-top:12px;"></div>
+                                <div><button class="btn btn-sm" type="button" onclick="addCosFile()">新增上传项</button></div>
+                            </div>
                             <div class="system-config-item"><label class="sys-check-label" for="cosEnabled"><input type="checkbox" id="cosEnabled">启用全部文件定时上传</label><div class="system-config-hint">保存即生效，无需额外设置系统计划任务。服务运行期间按间隔上传已有频道列表。</div></div>
                             <div class="system-config-item"><label for="cosIntervalMinutes">上传间隔（分钟）</label><input type="number" id="cosIntervalMinutes" min="1" max="10080" value="10"></div>
                         </div>
@@ -4861,7 +4864,7 @@
                         </div>
                         </fieldset>
                         <div id="cosStatus" class="system-config-hint" role="status" aria-live="polite" style="white-space:pre-line;margin-top:16px;">正在加载配置…</div>
-                        <div class="system-config-item" style="margin-top:16px;"><label for="cosUrl">当前文件的电视订阅地址</label><input type="text" id="cosUrl" readonly placeholder="保存存储桶和文件路径后显示"><button class="btn btn-sm" style="margin-top:8px;" onclick="copyCosUrl()">复制订阅地址</button></div>
+
                         <div class="system-config-hint">请在 COS 控制台为目标文件配置读取权限（例如该对象公有读）。文件内包含本服务的播放访问凭据，请妥善保管订阅地址。上传配置单独保存在数据目录 cos-config.json，换机时需单独迁移；本页不会读取旧的 cos.env 配置。</div>
                     </section>
                     <section class="sys-section" style="margin-top:16px;">
@@ -9823,42 +9826,74 @@ if(success){
         let cosPollBusy = false;
         const cosFieldNames = ['secretId', 'secretKey', 'bucket', 'region', 'publicBaseUrl', 'intervalMinutes'];
         let cosFiles = [];
-        let cosFileIndex = 0;
         let cosLastResult = null;
         let cosProfiles = [{ id: 'default', name: '默认' }];
+        function cosRowField(index, name) {
+            return document.querySelector(`#cosFileRows [data-file-index="${index}"] [data-field="${name}"]`);
+        }
         function captureCosFile() {
-            if (!cosFiles[cosFileIndex]) return;
-            cosFiles[cosFileIndex] = { key: cosField('key').value.trim(), profile: cosField('profile').value,
-                relay: cosField('relay').value, mergeLines: cosField('mergeLines').checked };
+            cosFiles = cosFiles.map((file, index) => {
+                if (!cosRowField(index, 'key')) return file;
+                return { key: cosRowField(index, 'key').value.trim(), profile: cosRowField(index, 'profile').value,
+                    relay: cosRowField(index, 'relay').value, mergeLines: cosRowField(index, 'mergeLines').checked };
+            });
         }
         function showCosFile() {
-            const select = document.getElementById('cosFileSelect');
-            select.replaceChildren(...cosFiles.map((file, index) => new Option(file.key || '未命名文件', String(index))));
-            select.value = String(cosFileIndex);
-            const file = cosFiles[cosFileIndex];
-            for (const name of ['key', 'relay']) cosField(name).value = file[name];
-            const profiles = [{ id: '', name: '默认配置档' }, ...cosProfiles.filter(p => p.id !== 'default')];
-            if (file.profile && !profiles.some(p => p.id === file.profile)) profiles.push({ id: file.profile, name: file.profile === 'default' ? '默认配置档' : file.profile + '（请检查配置档是否存在）' });
-            cosField('profile').replaceChildren(...profiles.map(p => new Option(p.name, p.id)));
-            cosField('profile').value = file.profile;
-            cosField('mergeLines').checked = file.mergeLines;
-            document.getElementById('cosRemoveFile').disabled = cosFiles.length <= 1;
+            const container = document.getElementById('cosFileRows');
+            container.replaceChildren();
+            cosFiles.forEach((file, index) => {
+                const row = document.createElement('section');
+                row.className = 'sys-section cos-file-row';
+                row.dataset.fileIndex = String(index);
+                row.style.cssText = 'margin:0 0 12px;padding:16px;min-width:0;overflow-wrap:anywhere;';
+                row.innerHTML = `<div class="system-config-grid">
+                    <div class="system-config-item"><label>配置档</label><select data-field="profile"></select></div>
+                    <div class="system-config-item"><label>文件名 / 路径</label><input type="text" data-field="key" placeholder="例如 iptv.m3u 或 guizhou.m3u"><div class="system-config-hint">可自定义文件名，例如 iptv.m3u、iptv2.m3u；也支持 tv/iptv.m3u，各项不能重名。</div></div>
+                    <div class="system-config-item"><label>订阅模式</label><select data-field="relay"><option value="">标准版</option><option value="1">兼容版</option><option value="2">全代理版</option></select></div>
+                    <div class="system-config-item"><label class="sys-check-label"><input type="checkbox" data-field="mergeLines">同名频道合并为多线路</label><div class="system-config-hint">同名频道输出多个播放地址，需要播放器支持。</div></div>
+                    <div class="system-config-item" style="grid-column:1/-1;"><label>电视订阅地址</label><input type="text" data-field="url" readonly placeholder="保存存储桶和文件名后显示"></div>
+                </div>
+                <div class="system-config-actions" style="margin-top:12px;justify-content:flex-start;flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" type="button" data-action="upload">保存并上传本项</button>
+                    <button class="btn btn-sm" type="button" data-action="copy">复制订阅地址</button>
+                    <button class="btn btn-sm" type="button" data-action="remove">移除此项</button>
+                </div>`;
+                const field = name => row.querySelector(`[data-field="${name}"]`);
+                for (const name of ['key', 'relay']) field(name).value = file[name];
+                const profiles = [{ id: '', name: '默认配置档' }, ...cosProfiles.filter(p => p.id !== 'default')];
+                if (file.profile && !profiles.some(p => p.id === file.profile)) profiles.push({ id: file.profile, name: file.profile === 'default' ? '默认配置档' : file.profile + '（配置档不存在）' });
+                field('profile').replaceChildren(...profiles.map(p => new Option(p.name, p.id)));
+                field('profile').value = file.profile;
+                field('mergeLines').checked = file.mergeLines;
+                for (const name of ['profile', 'key', 'relay', 'mergeLines', 'url']) {
+                    const input = field(name);
+                    input.id = 'cos' + name[0].toUpperCase() + name.slice(1) + (index || '');
+                    const label = input.closest('.system-config-item').querySelector('label');
+                    label.htmlFor = input.id;
+                }
+                field('key').oninput = () => { captureCosFile(); if (cosLastResult) renderCosStatus(cosLastResult); };
+                row.querySelector('[data-action="upload"]').onclick = () => saveCosConfig(true, index);
+                row.querySelector('[data-action="copy"]').onclick = () => copyCosUrl(index);
+                const remove = row.querySelector('[data-action="remove"]');
+                remove.disabled = cosFiles.length <= 1;
+                remove.onclick = () => removeCosFile(index);
+                container.append(row);
+            });
             if (cosLastResult) renderCosStatus(cosLastResult);
         }
-        function switchCosFile(index) { captureCosFile(); cosFileIndex = index; showCosFile(); }
         function addCosFile() {
-            if (cosFiles.length >= 20) return showStatus('最多配置 20 份订阅文件', 'error');
+            if (cosFiles.length >= 20) return showStatus('最多配置 20 个上传项', 'error');
             captureCosFile();
             let suffix = 2;
             while (cosFiles.some(file => file.key === `iptv${suffix}.m3u`)) suffix++;
-            cosFiles.push({ key: `iptv${suffix}.m3u`, profile: '', relay: '', mergeLines: false });
-            cosFileIndex = cosFiles.length - 1;
+            const profile = cosProfiles.find(p => !cosFiles.some(file => (file.profile || 'default') === p.id));
+            cosFiles.push({ key: `iptv${suffix}.m3u`, profile: profile && profile.id !== 'default' ? profile.id : '', relay: '', mergeLines: false });
             showCosFile();
         }
-        function removeCosFile() {
+        function removeCosFile(index) {
             if (cosFiles.length <= 1) return;
-            cosFiles.splice(cosFileIndex, 1);
-            cosFileIndex = Math.min(cosFileIndex, cosFiles.length - 1);
+            captureCosFile();
+            cosFiles.splice(index, 1);
             showCosFile();
         }
         function cosField(name) { return document.getElementById('cos' + name[0].toUpperCase() + name.slice(1)); }
@@ -9874,20 +9909,19 @@ if(success){
             cosLastResult = result;
             const s = result.status;
             updateCosHistory(s.history || []);
-            const file = result.files?.find(file => file.key === cosFiles[cosFileIndex]?.key);
-            const fs = file?.status || {};
+
             const time = value => value ? new Date(value).toLocaleString() : '暂无';
             document.getElementById('cosStatus').textContent = [
                 s.busy ? '正在上传…' : (s.lastError ? '最近上传失败：' + s.lastError : (s.lastSuccessAt ? '最近上传成功' : '尚未上传')),
                 '已保存文件数：' + (result.config.files?.length || 1),
-                '当前文件：' + (file?.key || '尚未保存'),
-                '当前文件最近成功：' + time(fs.lastSuccessAt),
-                ...(fs.lastError ? ['当前文件失败原因：' + fs.lastError] : []),
                 '最近尝试：' + time(s.lastAttemptAt),
                 '最近成功：' + time(s.lastSuccessAt),
                 '下次定时上传：' + (result.config.enabled ? time(s.nextRunAt) : '未开启')
             ].join('\n');
-            document.getElementById('cosUrl').value = file?.url || '';
+            cosFiles.forEach((file, index) => {
+                const field = cosRowField(index, 'url');
+                if (field) field.value = result.files?.find(saved => saved.key === file.key)?.url || '';
+            });
             document.getElementById('cosFields').disabled = cosActionBusy || s.busy;
             document.getElementById('cosHistoryClear').disabled = cosActionBusy || s.busy || !cosHistory.length;
         }
@@ -9945,7 +9979,7 @@ if(success){
                 document.getElementById('cosStatus').textContent = '加载失败：' + error.message;
             } finally { cosPollBusy = false; }
         }
-        async function saveCosConfig(uploadNow) {
+        async function saveCosConfig(uploadNow, fileIndex) {
             if (cosActionBusy || !cosLoaded) return;
             cosActionBusy = true;
             document.getElementById('cosFields').disabled = true;
@@ -9962,9 +9996,9 @@ if(success){
                 renderCosStatus(saved);
                 if (uploadNow) {
                     document.getElementById('cosStatus').textContent = '正在上传…';
-                    renderCosStatus(await cosRequest({ action: 'upload' }));
+                    renderCosStatus(await cosRequest({ action: 'upload', ...(fileIndex === undefined ? {} : { key: cosFiles[fileIndex].key }) }));
                 }
-                showStatus(uploadNow ? 'COS 全部文件上传成功' : 'COS 配置已保存', 'success');
+                showStatus(uploadNow ? (fileIndex === undefined ? 'COS 全部文件上传成功' : '本项上传成功') : 'COS 配置已保存', 'success');
             } catch (error) {
                 document.getElementById('cosStatus').textContent = error.message;
                 showStatus(error.message, 'error');
@@ -9974,8 +10008,8 @@ if(success){
                 await loadCosConfig();
             }
         }
-        async function copyCosUrl() {
-            const field = document.getElementById('cosUrl');
+        async function copyCosUrl(index = 0) {
+            const field = cosRowField(index, 'url');
             if (!field.value) return showStatus('请先保存 COS 配置', 'error');
             try {
                 if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(field.value);

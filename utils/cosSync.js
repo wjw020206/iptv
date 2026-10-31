@@ -158,16 +158,19 @@ export class CosSync {
     return this.view()
   }
 
-  async run(trigger = 'manual') {
+  async run(trigger = 'manual', fileKey) {
     if (this.busy) throw new Error('正在上传，请勿重复触发')
     const c = this.config()
-    const jobs = c.files.map(file => ({ file, env: this.env({ ...c, ...file }) }))
+    if (fileKey !== undefined && (typeof fileKey !== 'string' || !fileKey)) throw new Error('请选择要上传的文件')
+    const files = fileKey === undefined ? c.files : c.files.filter(file => file.key === fileKey)
+    if (!files.length) throw new Error('要上传的文件不存在，请先保存配置')
+    const jobs = files.map(file => ({ file, env: this.env({ ...c, ...file }) }))
     const state = { ...this.state(), lastAttemptAt: this.now(), lastError: '', nextRunAt: c.enabled ? this.now() + c.intervalMinutes * 60_000 : null }
     const record = {
       id: randomUUID(), trigger: trigger === 'scheduled' ? 'scheduled' : 'manual',
       startedAt: this.now(), finishedAt: null, durationMs: null, status: 'running',
       bucket: c.bucket, region: c.region,
-      files: c.files.map(file => ({ ...file, status: 'pending' })),
+      files: files.map(file => ({ ...file, status: 'pending' })),
     }
     state.history = [record, ...(state.history || [])].slice(0, HISTORY_LIMIT)
     const errorText = error => {

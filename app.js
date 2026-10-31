@@ -392,7 +392,7 @@ async function handleRequest(req, res) {
         if (method === 'POST') {
           const data = JSON.parse(await readBody(req))
           if (data.action === 'save') cosSync.save(data.config)
-          else if (data.action === 'upload') await cosSync.run()
+          else if (data.action === 'upload') await cosSync.run('manual', data.key)
           else if (data.action === 'clearHistory') cosSync.clearHistory()
           else if (data.action === 'followAddress') cosSync.followAddress(data.publicBaseUrl)
           else throw new Error('未知 COS 操作')
