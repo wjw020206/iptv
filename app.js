@@ -609,7 +609,7 @@ async function handleRequest(req, res) {
 
     // 消息推送渠道（utils/notify.js）：企微群机器人 / 企微应用 / 飞书 / 钉钉 / Telegram / Bark / 通用 Webhook / 自定义接口
     if (routePath === '/api/notify' && method === 'GET') {
-      const result = await getNotifyAPI()
+      const result = await getNotifyAPI(originOf(req))
       res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json;charset=UTF-8' });
       res.end(JSON.stringify(result));
       return
@@ -618,7 +618,7 @@ async function handleRequest(req, res) {
     if (routePath === '/api/notify' && method === 'POST') {
       try {
         const data = JSON.parse(await readBody(req))
-        const result = await postNotifyAPI(data)
+        const result = await postNotifyAPI(data, originOf(req))
         // 测试发送失败是正常结果（地址填错），不算服务端错误
         res.writeHead(result.success || data.action === 'test' ? 200 : 400, { 'Content-Type': 'application/json;charset=UTF-8' });
         res.end(JSON.stringify(result));

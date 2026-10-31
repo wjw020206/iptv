@@ -7092,7 +7092,7 @@
             const channels = notifyState.channels || [];
             const addCard = `<button type="button" class="notify-card-add" onclick="openNotifyForm()">＋ 添加推送渠道</button>`;
             if (!channels.length) {
-                box.innerHTML = `<div class="system-config-hint" style="margin:0 0 10px;">还没有推送渠道。点下面添加，选类型、填机器人地址，添加后点「发测试消息」确认能收到。</div>
+                box.innerHTML = `<div class="system-config-hint" style="margin:0 0 10px;">还没有推送渠道。点下面添加，选择类型并填写配置，添加后点「发测试消息」确认能收到。</div>
                     <div class="notify-grid">${addCard}</div>`;
                 return;
             }
@@ -7204,7 +7204,7 @@
                 ? `<div class="notify-preview-card-head red">${escapeHtml(m.title)}</div>`
                 : `<div class="notify-preview-card-body" style="padding-bottom:0;"><p><strong>${escapeHtml(m.title)}</strong></p></div>`;
             box.innerHTML = label + head + `<div class="notify-preview-card-body">${items}</div>`
-                + `<div class="notify-preview-card-note">来自 ${escapeHtml(m.host)}</div>`;
+                + (m.host ? `<div class="notify-preview-card-note">来自 ${escapeHtml(m.host)}</div>` : '');
         }
 
         /** 按所选类型画字段（输入框 / 下拉 / 多行）。编辑时敏感字段留空 = 不改，占位里注明已设置。 */
@@ -7223,7 +7223,7 @@
                 : '';
             box.innerHTML = help + presets + type.fields.map(f => {
                 const isSet = editing && editing.secretsSet && editing.secretsSet[f.key];
-                const value = editing && !f.secret ? (editing[f.key] || '') : '';
+                const value = !f.secret ? (editing ? (editing[f.key] || '') : (f.default || '')) : '';
                 const placeholder = isSet ? '已设置，留空保持不变' : (f.placeholder || '');
                 const attrs = `data-notify-field="${escapeHtml(f.key)}"`;
                 let control;

@@ -20,7 +20,7 @@ import { join } from 'node:path'
 
 const DATA_DIR = mkdtempSync(join(tmpdir(), 'iptv-notify-'))
 process.env.mdataDir = DATA_DIR
-const { Notifier, buildRequest, sendToChannel, formatMessage } = await import('../utils/notify.js')
+const { Notifier, buildRequest, sendToChannel, formatMessage, samplePreviews } = await import('../utils/notify.js')
 const { AlertTracker } = await import('../utils/alerts.js')
 
 let passed = 0
@@ -61,6 +61,95 @@ const pass = { id: 'users-no-pass', level: 'warning', title: '没设访问密码
 const evalOf = (alerts, extra = {}) => ({ alerts, activeIds: alerts.map(a => a.id), initial: false, ...extra })
 
 console.log('消息推送回归测试')
+
+await test('预览：未配置地址时不显示来源，已配置时使用真实地址', () => {
+  const empty = samplePreviews()
+  assert.equal(empty.message.host, '')
+  for (const text of Object.values(empty.previews)) assert.doesNotMatch(text, /来自|192\.168\.1\.10/)
+  const host = 'https://iptv.example.com'
+  const configured = samplePreviews(host)
+  assert.equal(configured.message.host, host)
+  for (const text of Object.values(configured.previews)) assert.ok(text.endsWith(`来自 ${host}`))
+})
+
+const smtp = { type: 'smtp', smtpUser: 'sender@gmail.com', smtpPass: 'APP_SECRET', mailTo: 'one@example.com,two@example.com' }
+
+await test('推送来源：默认当前域名和端口，重启保留，自定义地址优先', async () => {
+  const fetchImpl = fakeFetch()
+  const n = makeNotifier(fetchImpl)
+  n.rememberOrigin('https://tv.example.com:8443/admin')
+  assert.equal(n.sourceHost(), 'https://tv.example.com:8443')
+  const id = n.addChannel({ type: 'webhook', url: 'https://push.example.com' })
+  await n.testChannel(id)
+  assert.match(fetchImpl.calls[0].body.text, /来自 https:\/\/tv.example.com:8443/)
+  await n.handleEvaluation(evalOf([cred()]))
+  assert.match(fetchImpl.calls[1].body.text, /来自 https:\/\/tv.example.com:8443/)
+  const restored = new Notifier({ channelsPath: n.channelsPath, statePath: n.statePath, log: false })
+  assert.equal(restored.sourceHost(), 'https://tv.example.com:8443')
+  restored.host = () => 'https://custom.example.com'
+  assert.equal(restored.sourceHost(), 'https://custom.example.com')
+  restored.rememberOrigin('javascript:bad')
+  restored.host = () => ''
+  assert.equal(restored.sourceHost(), 'https://tv.example.com:8443')
+})
+
+await test('邮箱：Gmail 默认配置、凭据打码、编辑留空保留密码和参数校验', () => {
+  const n = makeNotifier()
+  const id = n.addChannel(smtp)
+  const saved = n.loadChannels()[0]
+  assert.equal(saved.smtpHost, 'smtp.gmail.com')
+  assert.equal(saved.smtpPort, '465')
+  assert.equal(n.publicChannels()[0].smtpPass, undefined)
+  assert.equal(n.publicChannels()[0].secretsSet.smtpPass, true)
+  n.updateChannel(id, { smtpPass: '', smtpPort: '587', smtpSecure: 'false' })
+  assert.equal(n.loadChannels()[0].smtpPass, 'APP_SECRET')
+  assert.throws(() => n.addChannel({ ...smtp, smtpPort: '65536' }), /端口/)
+  assert.throws(() => n.addChannel({ ...smtp, mailTo: 'bad-address' }), /收件邮箱/)
+  assert.throws(() => n.addChannel({ ...smtp, smtpPass: '' }), /密码/)
+})
+
+await test('邮箱：SSL 与 STARTTLS、发件人回退、多收件人和正文样式', async () => {
+  const message = formatMessage({ raised: [cred()], resolved: [{ title: '已恢复频道' }] }, 'https://iptv.example.com')
+  for (const secure of ['true', 'false']) {
+    let options, mail, closed = false
+    const result = await sendToChannel({ ...smtp, smtpSecure: secure, smtpPort: secure === 'true' ? '465' : '587', template: 'compact' }, message, {
+      createTransport: config => {
+        options = config
+        return { sendMail: async value => { mail = value; return { accepted: ['one@example.com', 'two@example.com'], rejected: [] } }, close: () => { closed = true } }
+      },
+    })
+    assert.equal(result.ok, true)
+    assert.equal(options.host, 'smtp.gmail.com')
+    assert.equal(options.secure, secure === 'true')
+    assert.equal(options.requireTLS, secure === 'false')
+    assert.deepEqual(options.auth, { user: smtp.smtpUser, pass: smtp.smtpPass })
+    assert.equal(mail.from, smtp.smtpUser)
+    assert.equal(mail.to, smtp.mailTo)
+    assert.match(mail.subject, /iPTV/)
+    assert.match(mail.text, /migu登录凭证已失效/)
+    assert.doesNotMatch(mail.text, /Token 被拒/)
+    assert.equal(closed, true)
+  }
+})
+
+await test('邮箱：认证失败脱敏、部分收件人拒收视为失败并关闭连接', async () => {
+  for (const rejectRecipient of [false, true]) {
+    let closed = false
+    const result = await sendToChannel(smtp, formatMessage({ raised: [cred()] }), {
+      createTransport: () => ({
+        sendMail: async () => {
+          if (!rejectRecipient) throw new Error('Invalid login APP_SECRET')
+          return { rejected: ['two@example.com'] }
+        },
+        close: () => { closed = true },
+      }),
+    })
+    assert.equal(result.ok, false)
+    assert.doesNotMatch(result.message, /APP_SECRET/)
+    assert.match(result.message, rejectRecipient ? /收件邮箱被拒绝/ : /Invalid login/)
+    assert.equal(closed, true)
+  }
+})
 
 // ── 消息格式与签名 ─────────────────────────────────────────────────────────
 const message = { raised: [{ id: 'a', level: 'error', title: '标题', text: '正文' }], resolved: [], host: '' }

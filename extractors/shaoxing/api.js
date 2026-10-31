@@ -3,6 +3,8 @@ import { CHANNELS, CHANNEL_BY_REF } from './channels.js'
 import { mediaUrl, verifyStream } from './media.js'
 
 export { CHANNELS }
+export const SHENGZHOU_REF = 'shaoxing-shengzhou'
+export const SHENGZHOU_URL = 'http://l.cztvcloud.com/channels/lantian/SXshengzhou1/720p.m3u8'
 export const TV_PAGE = 'https://www.shaoxing.com.cn/app/tv/75'
 export const LIST_API = 'https://app.shaoxing.com.cn/video/player/streamlist?site_id=10001&live_type=1'
 const API_BASE = 'https://app.shaoxing.com.cn/video/player/'
@@ -63,9 +65,10 @@ async function candidates(row, options) {
   return urls
 }
 
-export function claimsRef(ref) { return CHANNEL_BY_REF.has(ref) }
+export function claimsRef(ref) { return ref === SHENGZHOU_REF || CHANNEL_BY_REF.has(ref) }
 
 export async function resolveChannel(ref, ctx = {}) {
+  if (ref === SHENGZHOU_REF) return { url: SHENGZHOU_URL, desc: '嵊州新闻综合公开直播地址', relayHls: true }
   const channel = CHANNEL_BY_REF.get(ref)
   if (!channel) return { url: '', desc: '绍兴频道引用无效' }
   const tried = new Set()

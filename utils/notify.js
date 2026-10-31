@@ -1,6 +1,6 @@
 /**
  * 消息推送：把提醒中心（utils/alerts.js）的「新出现 / 已恢复」发到企业微信（群机器人 / 应用消息）、
- * 飞书、钉钉、Telegram、Bark、任意 Webhook，或按用户自己填的请求模板发到 PushPlus、Server酱
+ * 飞书、钉钉、Telegram、Bark、SMTP 邮箱、任意 Webhook，或按用户自己填的请求模板发到 PushPlus、Server酱
  * 这类推送平台（自定义接口）。只做出站推送，不接收任何指令。
  *
  * 两份文件，刻意分开：
@@ -16,6 +16,7 @@
  * 一轮里的多条合成一条消息。发送失败只记在渠道结果里，不重试——下次状态变化照常发。
  */
 import { createHmac, randomBytes } from "node:crypto"
+import nodemailer from 'nodemailer'
 import { existsSync, readFileSync } from "node:fs"
 import { writeJsonFileSync } from "./fileUtil.js"
 import { dataPath } from "./paths.js"
@@ -32,6 +33,19 @@ const MAX_TEXT = 1800   // 企微 text 上限 2048 字节左右，留余量；�
  * 字段 key 同时是 notify-channels.json 里的键名。
  */
 export const CHANNEL_TYPES = {
+  smtp: {
+    name: '邮箱（SMTP / Gmail）',
+    help: 'Gmail 使用 smtp.gmail.com、465 端口和 SSL/TLS。先在 Google 账号开启两步验证，再生成应用专用密码；不要填写网页登录密码。SMTP 由服务器直接连接，请确保服务器能访问邮箱服务。',
+    fields: [
+      { key: 'smtpHost', label: 'SMTP 服务器', required: true, default: 'smtp.gmail.com' },
+      { key: 'smtpPort', label: 'SMTP 端口', required: true, default: '465' },
+      { key: 'smtpSecure', label: '加密方式', options: [{ value: 'true', label: 'SSL/TLS（通常为 465）' }, { value: 'false', label: 'STARTTLS（通常为 587）' }] },
+      { key: 'smtpUser', label: '登录邮箱', required: true, placeholder: 'yourname@gmail.com' },
+      { key: 'smtpPass', label: '应用专用密码 / SMTP 授权码', secret: true, required: true },
+      { key: 'mailFrom', label: '发件邮箱（留空使用登录邮箱）', placeholder: 'yourname@gmail.com' },
+      { key: 'mailTo', label: '收件邮箱（多个用英文逗号分隔）', required: true, placeholder: 'receiver@example.com' },
+    ],
+  },
   feishu: {
     name: '飞书群机器人',
     fields: [
@@ -180,7 +194,7 @@ function normalizeChannel(raw) {
   }
   if (TEMPLATES[raw.template] && raw.template !== 'detailed') channel.template = raw.template
   for (const field of CHANNEL_TYPES[type].fields) {
-    const value = trimStr(raw[field.key])
+    const value = trimStr(raw[field.key] ?? field.default)
     if (!value || (field.options && !field.options.some(option => option.value === value))) continue
     channel[field.key] = value.slice(0, field.multiline ? 4000 : 1000)
   }
@@ -196,6 +210,14 @@ function validateChannel(channel) {
     if (channel[key] && !isHttpUrl(channel[key])) return '地址要以 http:// 或 https:// 开头'
   }
   if (channel.agentId && !/^\d+$/.test(channel.agentId)) return 'AgentId 是一串数字，如 1000002'
+  if (channel.type === 'smtp') {
+    if (!/^\d+$/.test(channel.smtpPort) || Number(channel.smtpPort) < 1 || Number(channel.smtpPort) > 65535) return 'SMTP 端口必须是 1 到 65535 之间的整数'
+    if (!/^[a-z0-9.-]+$/i.test(channel.smtpHost)) return 'SMTP 服务器请填写主机名或 IPv4 地址，不要带协议或端口'
+    const email = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
+    if (!email.test(channel.smtpUser)) return '请填写有效的登录邮箱'
+    if (channel.mailFrom && !email.test(channel.mailFrom)) return '请填写有效的发件邮箱'
+    if (!channel.mailTo.split(',').every(value => email.test(value.trim()))) return '请填写有效的收件邮箱，多个邮箱用英文逗号分隔'
+  }
   if (channel.type === 'custom') return validateCustom(channel)
   return ''
 }
@@ -559,7 +581,38 @@ async function deliver(channel, message, call, now) {
   }
 }
 
-export async function sendToChannel(channel, message, { fetchImpl = proxyAwareFetch, now = Date.now() } = {}) {
+async function sendEmail(channel, message, createTransport) {
+  const transport = createTransport({
+    host: channel.smtpHost || 'smtp.gmail.com',
+    port: Number(channel.smtpPort || 465),
+    secure: channel.smtpSecure !== 'false',
+    requireTLS: channel.smtpSecure === 'false',
+    auth: { user: channel.smtpUser, pass: channel.smtpPass },
+    connectionTimeout: SEND_TIMEOUT_MS,
+    greetingTimeout: SEND_TIMEOUT_MS,
+    socketTimeout: SEND_TIMEOUT_MS,
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  })
+  let timer
+  try {
+    const result = await Promise.race([
+      transport.sendMail({
+        from: channel.mailFrom || channel.smtpUser,
+        to: channel.mailTo,
+        subject: messageTitle(message),
+        text: plainText(message, templateOf(channel)),
+      }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('邮箱推送 10 秒没有响应')), SEND_TIMEOUT_MS) }),
+    ])
+    if (result.rejected?.length) throw new Error(`收件邮箱被拒绝：${result.rejected.join(', ')}`)
+  } finally {
+    clearTimeout(timer)
+    transport.close()
+  }
+}
+
+export async function sendToChannel(channel, message, { fetchImpl = proxyAwareFetch, now = Date.now(), createTransport = nodemailer.createTransport } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS)
   // body 是对象时按 JSON 发；字符串（自定义接口排好的）原样发，Content-Type 由 headers 给
@@ -576,6 +629,10 @@ export async function sendToChannel(channel, message, { fetchImpl = proxyAwareFe
     return { status: res.status, payload, text }
   }
   try {
+    if (channel.type === 'smtp') {
+      await sendEmail(channel, message, createTransport)
+      return { ok: true, message: '' }
+    }
     const error = await deliver(channel, message, call, now)
     return error ? { ok: false, message: scrub(error, channel) } : { ok: true, message: '' }
   } catch (error) {
@@ -603,7 +660,7 @@ export function formatMessage({ raised = [], resolved = [] }, host = '') {
 /** 后台表单里的样式预览用的示例：一条错误提醒 + 一条已恢复。 */
 export function samplePreviews(host = '') {
   const message = {
-    host: host || 'http://192.168.1.10:1905',
+    host,
     raised: [{ level: 'error', title: '央视频登录凭证已失效', text: '央视频登录态已失效（官网没认出关联过的账号），10 个会员频道暂时播不了；请在后台重新登录或导入登录态' }],
     resolved: [{ title: '咪咕登录凭证已失效' }],
   }
@@ -644,6 +701,7 @@ export class Notifier {
   #loadState() {
     const raw = readJson(this.statePath, {})
     return {
+      sourceOrigin: typeof raw.sourceOrigin === 'string' ? raw.sourceOrigin : '',
       pushed: raw.pushed && typeof raw.pushed === 'object' ? raw.pushed : {},
       results: raw.results && typeof raw.results === 'object' ? raw.results : {},
     }
@@ -651,6 +709,22 @@ export class Notifier {
 
   #saveState(state) {
     try { writeJsonFileSync(this.statePath, state) } catch (error) { printYellow(`推送记录写盘失败：${error.message}`) }
+  }
+
+  /** 记住访问推送设置时的地址，后台自动推送和重启后也能标明来源。 */
+  rememberOrigin(origin) {
+    if (!origin) return
+    let url
+    try { url = new URL(origin) } catch { return }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return
+    const state = this.#loadState()
+    if (state.sourceOrigin === url.origin) return
+    state.sourceOrigin = url.origin
+    this.#saveState(state)
+  }
+
+  sourceHost() {
+    return this.host() || this.#loadState().sourceOrigin
   }
 
   /** 给后台的渠道列表：敏感字段打码，带上最近一次发送结果。 */
@@ -714,7 +788,7 @@ export class Notifier {
   async testChannel(id) {
     const channel = this.loadChannels().find(item => item.id === id)
     if (!channel) throw new Error('推送渠道不存在')
-    const result = await sendToChannel(channel, { test: true, channelName: channel.name, host: this.host() }, { fetchImpl: this.fetchImpl })
+    const result = await sendToChannel(channel, { test: true, channelName: channel.name, host: this.sourceHost() }, { fetchImpl: this.fetchImpl })
     this.#recordResults({ [channel.id]: result })
     return result
   }
@@ -779,7 +853,7 @@ export class Notifier {
     for (const alert of raised) pushed[alert.id] = { title: alert.title }
     this.#saveState(state)
 
-    const message = formatMessage({ raised, resolved }, this.host())
+    const message = formatMessage({ raised, resolved }, this.sourceHost())
     const results = {}
     await Promise.all(channels.map(async channel => {
       results[channel.id] = await sendToChannel(channel, message, { fetchImpl: this.fetchImpl })
@@ -804,23 +878,25 @@ export async function getNotifier() {
 
 // ---- 后台接口 ----
 
-export async function getNotifyAPI() {
+export async function getNotifyAPI(origin = '') {
   try {
     const notifier = await getNotifier()
+    notifier.rememberOrigin(origin)
     const types = Object.entries(CHANNEL_TYPES).map(([id, type]) => ({
       id, name: type.name, fields: type.fields, help: type.help, presets: type.presets,
       templates: Object.entries(TEMPLATES).filter(([, t]) => !t.types || t.types.includes(id)).map(([key]) => key),
     }))
     const templates = Object.entries(TEMPLATES).map(([id, t]) => ({ id, name: t.name, description: t.description }))
-    return { success: true, data: { channels: notifier.publicChannels(), types, templates, sample: samplePreviews(notifier.host()) } }
+    return { success: true, data: { channels: notifier.publicChannels(), types, templates, sample: samplePreviews(notifier.sourceHost()) } }
   } catch (error) {
     return { success: false, message: error.message }
   }
 }
 
-export async function postNotifyAPI(data = {}) {
+export async function postNotifyAPI(data = {}, origin = '') {
   try {
     const notifier = await getNotifier()
+    notifier.rememberOrigin(origin)
     switch (data.action) {
       case 'add': notifier.addChannel(data.channel || {}); break
       case 'update': notifier.updateChannel(data.id, data.fields || {}); break
