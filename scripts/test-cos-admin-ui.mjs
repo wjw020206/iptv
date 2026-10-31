@@ -43,6 +43,7 @@ try {
   await page.evaluate(async () => { await switchTab(2); switchSettingsTab(7) })
   await page.waitForFunction(() => document.querySelector('#cosSecretId').placeholder === '填写 SecretId')
   assert.equal(await page.$eval('#cosFollowServerAddress', el => el.checked), true)
+  assert.equal(await page.$eval('#cosUploadOnUpdate', el => el.checked), false)
   assert.ok((await page.$eval('#cosAddressHint', el => el.textContent)).includes('本地或内网'))
   await page.$eval('#cosFollowServerAddress', el => el.click())
   const values = { cosSecretId: 'test-id', cosSecretKey: 'test-key', cosBucket: 'tv-12345', cosRegion: 'ap-shanghai', cosKey: 'tv.m3u', cosPublicBaseUrl: 'http://203.0.113.10:1905', cosIntervalMinutes: '2' }
@@ -239,6 +240,21 @@ try {
   assert.ok(afterHide.includes('/123'))
   assert.ok(!afterHide.includes('/relay/ysp-test.m3u8'))
   assert.equal(countEntries(afterHide), 1)
+  // 保存配置档后自动上传，记录明确标为更新后同步，并与手动记录共用列表。
+  cosSync.save({ enabled: false, uploadOnUpdate: true })
+  const beforeRefreshUpload = uploads.length
+  await page.evaluate(() => saveMyPlaylist())
+  await page.waitForFunction(async () => {
+    const result = await (await fetch(`${API_PREFIX}/api/cos`)).json()
+    return result.status.history[0]?.trigger === 'refresh' && result.status.history[0]?.status === 'success'
+  })
+  assert.ok(uploads.length > beforeRefreshUpload)
+  await page.evaluate(async () => { await switchTab(2); switchSettingsTab(7); await loadCosConfig() })
+  assert.equal(await page.$eval('#cosUploadOnUpdate', el => el.checked), true)
+  assert.ok((await page.$eval('#cosHistoryList', el => el.textContent)).includes('更新后同步'))
+  await page.$eval('#cosUploadOnUpdate', el => el.click())
+  await page.evaluate(() => saveCosConfig(false))
+  assert.equal(cosSync.config().uploadOnUpdate, false)
   assert.deepEqual(errors, [])
   console.log('COS 页面/API 联调通过：多文件不同内容、上传历史详情/筛选/分页/错误文本、鉴权、凭据保护、刷新恢复、移动布局')
 } catch (error) {

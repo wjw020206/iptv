@@ -21,6 +21,7 @@ import { readMiguTokenState, markMiguTokenRefreshed, MIGU_TOKEN_REFRESH_INTERVAL
 import { readFileSync, existsSync, statSync } from "node:fs"
 import { announcementM3uEntry, announcementTxtEntry } from "./announcement.js"
 import miguDanmaku from "../extractors/migu/danmaku.js"
+import { cosSync } from './cosSync.js'
 
 const PE_CACHE_PATH = dataPath('pe-cache.json')
 
@@ -748,6 +749,7 @@ async function runUpdate(hours, options = {}) {
     // 避免重复调用大量 PE API，保持快速模式
     restorePEFromCache('快速模式')
   }
+  cosSync.playlistUpdated()
 }
 
 // 单飞锁：串行化所有 update() 调用。

@@ -850,6 +850,7 @@ async function handleRequest(req, res) {
         if (list.length > 500) list = list.slice(-500)   // 上限兜底，防配置膨胀
         cfg.disabledSources = list
         const result = saveConfig(pid, cfg)
+        if (result.success) cosSync.playlistUpdated()
         // 升级过渡自愈：老 interface.txt 还没有 source-ids 标记时（升级后未重新生成过），
         // 触发一次「仅重生成播放列表」，让按档禁源立即可用，而不是等下一轮全量更新
         if (result.success !== false && !sourceIdsHealAttempted) {
@@ -1034,6 +1035,7 @@ async function handleRequest(req, res) {
         }
 
         const result = saveConfig(profileParam, config)
+        if (result.success) cosSync.playlistUpdated()
         res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json;charset=UTF-8' });
         res.end(JSON.stringify(result));
         printGreen("播放列表配置已保存")

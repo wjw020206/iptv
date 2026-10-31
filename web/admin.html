@@ -4855,6 +4855,7 @@
                                 <div id="cosFileRows" style="margin-top:12px;"></div>
                                 <div><button class="btn btn-sm" type="button" onclick="addCosFile()">新增上传项</button></div>
                             </div>
+                            <div class="system-config-item"><label class="sys-check-label" for="cosUploadOnUpdate"><input type="checkbox" id="cosUploadOnUpdate">频道更新后自动上传 COS</label><div class="system-config-hint">默认关闭。开启后，频道列表成功更新或配置档频道设置保存后自动上传全部文件；正在上传时会在完成后补传最新内容。与定时上传独立。</div></div>
                             <div class="system-config-item"><label class="sys-check-label" for="cosEnabled"><input type="checkbox" id="cosEnabled">启用全部文件定时上传</label><div class="system-config-hint">保存即生效，无需额外设置系统计划任务。服务运行期间按间隔上传已有频道列表。</div></div>
                             <div class="system-config-item"><label for="cosIntervalMinutes">上传间隔（分钟）</label><input type="number" id="cosIntervalMinutes" min="1" max="10080" value="10"></div>
                         </div>
@@ -4870,7 +4871,7 @@
                     <section class="sys-section" style="margin-top:16px;">
                         <div class="sys-section-head">
                             <div class="sys-section-title">上传记录</div>
-                            <div class="sys-section-desc">保留最近 100 次上传，包含手动和定时任务。展开查看每份文件的结果、大小、耗时和失败原因；服务重启后仍可查看。</div>
+                            <div class="sys-section-desc">保留最近 100 次上传，包含手动、定时和更新后同步任务。展开查看每份文件的结果、大小、耗时和失败原因；服务重启后仍可查看。</div>
                         </div>
                         <div class="system-config-actions" style="justify-content:flex-start;margin-bottom:16px;">
                             <button class="btn btn-sm" id="cosHistoryClear" onclick="clearCosHistory()" disabled>清空上传记录</button>
@@ -9798,7 +9799,7 @@ if(success){
                 summary.style.cursor = 'pointer';
                 const files = record.files.filter(file => !key || file.key === key);
                 const succeeded = record.files.filter(file => file.status === 'success').length;
-                summary.textContent = `${time(record.startedAt)} · ${record.trigger === 'scheduled' ? '定时' : '手动'} · ${cosHistoryLabels[record.status] || record.status} · ${succeeded}/${record.files.length} 个文件成功`;
+                summary.textContent = `${time(record.startedAt)} · ${record.trigger === 'refresh' ? '更新后同步' : record.trigger === 'scheduled' ? '定时' : '手动'} · ${cosHistoryLabels[record.status] || record.status} · ${succeeded}/${record.files.length} 个文件成功`;
                 details.append(summary);
                 line(details, `开始：${time(record.startedAt)}　结束：${time(record.finishedAt)}　耗时：${duration(record.durationMs)}`);
                 line(details, `存储桶：${record.bucket}　地域：${record.region}`);
@@ -9965,6 +9966,7 @@ if(success){
                         cosField(name).value = name.startsWith('secret') ? '' : result.config[name];
                     }
                     cosField('enabled').checked = result.config.enabled;
+                    cosField('uploadOnUpdate').checked = result.config.uploadOnUpdate === true;
                     cosField('followServerAddress').checked = result.config.followServerAddress;
                     updateCosAddressMode();
                     cosFiles = result.config.files.map(file => ({ ...file }));
@@ -9986,6 +9988,7 @@ if(success){
             try {
                 const config = Object.fromEntries(cosFieldNames.map(name => [name, name === 'intervalMinutes' ? Number(cosField(name).value) : cosField(name).value.trim()]));
                 config.enabled = cosField('enabled').checked;
+                config.uploadOnUpdate = cosField('uploadOnUpdate').checked;
                 config.followServerAddress = cosField('followServerAddress').checked;
                 captureCosFile();
                 config.files = cosFiles;

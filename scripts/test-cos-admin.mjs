@@ -24,6 +24,7 @@ const config = {
 }
 try {
   assert.equal(service.view().config.enabled, false)
+  assert.equal(service.view().config.uploadOnUpdate, false, '更新后同步默认关闭')
   assert.equal(service.view().config.mergeLines, false)
   writeFileSync(configFile, JSON.stringify(config)) // 模拟升级前已保存的单文件配置
   assert.deepEqual(service.config().files, [{ key: config.key, profile: 'bedroom', relay: '1', mergeLines: false }])
@@ -207,6 +208,36 @@ try {
   service.followAddress('https://new.example.com')
   assert.equal(service.config().publicBaseUrl, 'https://tv.example.com:8443')
   assert.throws(() => service.save({ followServerAddress: 'true' }))
+  // 默认不联动；开启更新后同步不需要启用周期任务。
+  service.save({ enabled: false, uploadOnUpdate: false })
+  const initialCount = service.state().history.length
+  service.playlistUpdated()
+  await service.flushRefreshUpload()
+  assert.equal(service.state().history.length, initialCount)
+  assert.throws(() => service.save({ uploadOnUpdate: 'true' }))
+  service.save({ uploadOnUpdate: true })
+  service.playlistUpdated()
+  service.playlistUpdated()
+  await service.flushRefreshUpload()
+  assert.equal(service.state().history.length, initialCount + 1, '连续更新合并为一次上传')
+  assert.equal(service.state().history[0].trigger, 'refresh')
+  let releaseUpload
+  service.sync = () => new Promise(resolve => { releaseUpload = () => resolve({ bytes: 123 }) })
+  const inFlight = service.run()
+  service.playlistUpdated()
+  await service.flushRefreshUpload()
+  assert.equal(service.refreshPending, true, '上传期间的更新不能丢失')
+  releaseUpload()
+  await inFlight
+  service.sync = async () => ({ bytes: 456 })
+  await service.flushRefreshUpload()
+  assert.equal(service.state().history[0].trigger, 'refresh')
+  assert.equal(service.state().history[0].files[0].bytes, 456)
+  service.playlistUpdated()
+  service.save({ uploadOnUpdate: false })
+  const disabledCount = service.state().history.length
+  await service.flushRefreshUpload()
+  assert.equal(service.state().history.length, disabledCount, '关闭开关后取消待执行的同步')
   console.log('COS 后台测试通过：多文件、上传历史、手动/定时、部分失败、中断恢复、持久化、100 次上限、凭据保护与防重入')
 } finally {
   service.stop()

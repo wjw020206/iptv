@@ -9,7 +9,7 @@ import { syncCos, validateCosEnv } from './cosUpload.js'
 
 const HISTORY_LIMIT = 100
 const FILE_DEFAULTS = { key: 'iptv.m3u', profile: '', relay: '', mergeLines: false }
-const DEFAULTS = { secretId: '', secretKey: '', bucket: '', region: 'ap-shanghai', key: 'iptv.m3u', publicBaseUrl: '', followServerAddress: true, profile: '', relay: '', mergeLines: false, enabled: false, intervalMinutes: 10 }
+const DEFAULTS = { secretId: '', secretKey: '', bucket: '', region: 'ap-shanghai', key: 'iptv.m3u', publicBaseUrl: '', followServerAddress: true, profile: '', relay: '', mergeLines: false, enabled: false, uploadOnUpdate: false, intervalMinutes: 10 }
 
 function readJson(file, fallback) {
   if (!existsSync(file)) return fallback
@@ -39,6 +39,32 @@ export class CosSync {
     Object.assign(this, { configFile, stateFile, sync, now, getPort, getProfiles })
     this.busy = false
     this.timer = null
+    this.refreshTimer = null
+    this.refreshPending = false
+  }
+
+  playlistUpdated() {
+    try {
+      if (!this.config().uploadOnUpdate) return
+      this.refreshPending = true
+      this.scheduleRefreshUpload()
+    } catch (error) { console.error(`COS 自动同步失败：${error.message}`) }
+  }
+
+  scheduleRefreshUpload() {
+    if (!this.refreshPending || this.refreshTimer || this.busy) return
+    // 合并短时间内的多次配置保存；正在上传时由 finally 补传最新列表。
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      void this.flushRefreshUpload().catch(error => console.error(`COS 更新后上传失败：${error.message}`))
+    }, 1000)
+    this.refreshTimer.unref()
+  }
+
+  async flushRefreshUpload() {
+    if (this.busy || !this.refreshPending) return
+    this.refreshPending = false
+    if (this.config().uploadOnUpdate) await this.run('refresh')
   }
 
   config() {
@@ -86,7 +112,7 @@ export class CosSync {
     const c = this.config()
     for (const key of Object.keys(DEFAULTS)) {
       if (!Object.hasOwn(input, key)) continue
-      if (key === 'enabled' || key === 'mergeLines' || key === 'followServerAddress') {
+      if (key === 'enabled' || key === 'uploadOnUpdate' || key === 'mergeLines' || key === 'followServerAddress') {
         if (typeof input[key] !== 'boolean') throw new Error('COS 开关必须是布尔值')
         c[key] = input[key]
       } else if (key === 'intervalMinutes') {
@@ -167,7 +193,7 @@ export class CosSync {
     const jobs = files.map(file => ({ file, env: this.env({ ...c, ...file }) }))
     const state = { ...this.state(), lastAttemptAt: this.now(), lastError: '', nextRunAt: c.enabled ? this.now() + c.intervalMinutes * 60_000 : null }
     const record = {
-      id: randomUUID(), trigger: trigger === 'scheduled' ? 'scheduled' : 'manual',
+      id: randomUUID(), trigger: ['scheduled', 'refresh'].includes(trigger) ? trigger : 'manual',
       startedAt: this.now(), finishedAt: null, durationMs: null, status: 'running',
       bucket: c.bucket, region: c.region,
       files: files.map(file => ({ ...file, status: 'pending' })),
@@ -223,6 +249,7 @@ export class CosSync {
       this.busy = false
       state.nextRunAt = c.enabled ? this.now() + c.intervalMinutes * 60_000 : null
       writeJsonFileSync(this.stateFile, state)
+      this.scheduleRefreshUpload()
     }
   }
 
@@ -264,7 +291,13 @@ export class CosSync {
     this.timer.unref()
   }
 
-  stop() { clearInterval(this.timer); this.timer = null }
+  stop() {
+    clearInterval(this.timer)
+    clearTimeout(this.refreshTimer)
+    this.timer = null
+    this.refreshTimer = null
+    this.refreshPending = false
+  }
 }
 
 export const cosSync = new CosSync()
