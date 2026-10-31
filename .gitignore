@@ -34,6 +34,8 @@ notify-state.json
 extractors.json.corrupt
 built-in-sources-remote.json
 pe-cache.json
+migu-danmaku-rooms.json
+migu-danmaku-rooms.json.tmp
 # 央视频持久浏览器登录态（等同账号凭据，不进入仓库/JSON 配置备份）
 /yangshipin/
 /iqiyi-sports/
