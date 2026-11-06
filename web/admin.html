@@ -3202,7 +3202,7 @@
         .source-badge, .status-badge, .external-mode-badge, .mode-badge,
         .instant-badge, .login-state-badge, .channel-tag { padding: 2px 7px; border-radius: 5px; font-weight: 500; }
         .source-badge.builtin, .source-badge.account, .source-badge.live,
-        .source-badge.standard, .source-badge.overseas, .source-badge.institution,
+        .source-badge.standard, .source-badge.overseas,
         .external-mode-badge.fetch, .external-mode-badge.direct, .external-mode-badge.subscription,
         .mode-badge, .mode-badge.mode-direct, .mode-badge.mode-subscription {
             color: var(--ui-text-secondary);
@@ -4703,7 +4703,7 @@
                         <div class="system-config-item">
                             <label>节目单更新间隔（小时） <span class="sys-badge is-restart" title="保存后要重启服务才生效，可直接点下方「保存并重启」">需重启</span></label>
                             <input type="number" id="sysProgramInterval" oninput="setSaveDirty('sysconfig')" placeholder="8">
-                            <div class="system-config-hint" style="color:#d4380d;">⚠️ 咪咕频道 / EPG / 体育的全量更新间隔。<strong>如果填写了咪咕 Token（登录账号），建议设置 8 小时以上</strong>——过于频繁请求可能触发风控、影响账号。</div>
+                            <div class="system-config-hint" style="color:#d4380d;">⚠️ 咪咕频道 / EPG / 体育的全量更新间隔。<strong>如果填写了咪咕 Token（登录账号），建议设置 8 小时以上</strong>——过于频繁请求可能触发风控、影响账号。另外每天北京时间 00:10 会自动多更新一次，补上新一天的节目单（不少省台只发当天的）。</div>
                         </div>
                         <div class="system-config-item">
                             <label class="sys-check-label">
@@ -4835,6 +4835,13 @@
                     </div>
                     <div class="system-config-hint" style="margin-top:6px;">导入会<strong>覆盖当前同名配置</strong>（导入前会自动把当前配置备份到数据目录 <code>config-pre-import-backup.json</code>，写坏可手动恢复）；导入后多数配置即时生效，端口修改需重启。</div>
                 </div>
+                <div class="settings-backup settings-editor-card" style="margin-top: 12px;">
+                    <div style="font-size:16px; font-weight:600; color:#333;">清理崩溃转储</div>
+                    <div class="system-config-hint">程序崩溃时系统可能在服务器上留下 <code>core.数字</code> 文件，每个几十 MB。服务启动时和之后每小时会自动清理，也可以马上清一次。只删这类文件，不影响配置和缓存。</div>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-primary" onclick="cleanCoreDumps()">立即清理</button>
+                    </div>
+                </div>
                 </div>
                 <div class="settings-subpanel" id="settingsSub7">
                     <section class="sys-section">
@@ -4902,7 +4909,7 @@
                                 <strong>当前版本</strong>
                             </div>
                             <div class="about-version-body">
-                                <span id="versionText">v4.54.0</span>
+                                <span id="versionText">v4.61.0</span>
                                 <button class="btn btn-sm" onclick="checkUpdate()" id="checkUpdateBtn">检查更新</button>
                             </div>
                             <div id="updateInfo" class="about-update-info" style="display: none;"></div>
@@ -5259,6 +5266,47 @@
                 ${hint}${envNote}</div>`;
         }
 
+        function initYouTubeSubscriptions() {
+            const input = document.getElementById('youtubeInput');
+            if (!input) return;
+            const events = document.getElementById('youtubeEvents');
+            let busy = false;
+            async function submit(action, fields) {
+                if (busy) return;
+                busy = true;
+                const controls = input.closest('.bookmarklet-section').querySelectorAll('button,input');
+                controls.forEach(el => { el.disabled = true; });
+                events.textContent = action === 'youtubeInspect' ? '正在查询 YouTube 场次…' : '正在更新订阅…';
+                try {
+                    const result = await extractorPost({ action, ...fields });
+                    if (!input.isConnected) return;
+                    if (!result.success) { events.textContent = result.message || 'YouTube 请求失败'; return; }
+                    if (action !== 'youtubeInspect') {
+                        applyExtractorResult(result, action === 'youtubeRemove' ? '已移除订阅' : '已保存订阅，启用模块后可在 M3U 的 YouTube 直播分组观看');
+                        return;
+                    }
+                    events.replaceChildren();
+                    const heading = document.createElement('p');
+                    heading.textContent = result.item.name + (result.item.videoId ? ' · 固定场次' : result.events.length ? ' · 当前场次' : ' · 暂无公开直播或预约');
+                    events.append(heading);
+                    for (const event of result.events) {
+                        const p = document.createElement('p');
+                        const add = document.createElement('button');
+                        add.className = 'btn btn-sm'; add.textContent = '订阅此场';
+                        add.onclick = () => submit('youtubeAdd', { url: event.url });
+                        p.append((event.status === 'is_live' ? '直播中 · ' : '已预约 · ') + event.name + ' ', add);
+                        events.append(p);
+                    }
+                } catch { events.textContent = '无法连接源管理接口'; }
+                finally { busy = false; controls.forEach(el => { el.disabled = false; }); }
+            }
+            document.getElementById('youtubeInspect').onclick = () => submit('youtubeInspect', { url: input.value });
+            document.getElementById('youtubeAdd').onclick = () => submit('youtubeAdd', { url: input.value });
+            for (const button of document.querySelectorAll('[data-youtube-remove]')) {
+                button.onclick = () => submit('youtubeRemove', { ref: button.dataset.youtubeRemove });
+            }
+        }
+
         /**
          * 「清除凭据」：把 secret 输入框标记为待清空，保存时对该字段发显式 null。
          * 之后用户又输入了新值的话，oninput 会摘掉标记（输入优先于清空）。
@@ -5352,6 +5400,20 @@
         // 模块可以声明 helper，在自己的卡片里多渲染一块辅助 UI。
         // markup 留在这里而不是模块文件：配套的 CSS、引导弹窗、bookmarklet 代码都在本页。
         function extractorHelperHtml(key, secretsSet, config, health) {
+            if (key === 'youtube-subscriptions') {
+                let rows = [];
+                try { const saved = JSON.parse(config.subscriptions || '[]'); if (Array.isArray(saved)) rows = saved; } catch {}
+                return `<div class="bookmarklet-section">
+                    <label for="youtubeInput"><strong>频道或直播场次</strong></label>
+                    <div class="bookmarklet-actions"><input type="text" id="youtubeInput" maxlength="2048" placeholder="用户名（@ 可省略）、频道或直播链接">
+                    <button class="btn btn-sm" id="youtubeInspect">查看场次</button>
+                    <button class="btn btn-sm btn-primary" id="youtubeAdd">添加订阅</button></div>
+                    <p>频道未开播时保留；多场同播时按官方列表选择第一场，也可单独添加某场直播或预约。</p>
+                    <div id="youtubeEvents" aria-live="polite"></div>
+                    <div id="youtubeSaved">${rows.length ? '' : '<p>还没有订阅。添加第一个频道后，它会出现在 M3U 的「YouTube 直播」分组。</p>'}${rows.map(row => `<p>${escapeHtml(row.name)} · ${row.videoId ? '固定场次' : '关注频道'}
+                      <button class="btn btn-sm" data-youtube-remove="${escapeHtml(row.videoId || row.channelId)}">移除</button></p>`).join('')}</div>
+                </div>`;
+            }
             if (key === 'fengshows-bookmarklet') {
                 const configured = !!secretsSet.token;
                 // 刷新检查或播放时官网回「账号已过期」，服务端会改走游客 480p 并在这里亮出来
@@ -5747,11 +5809,20 @@
             return parts.length ? prefix + parts.join('、') : '没有改动';
         }
 
-        /** 摘要下面的额外提醒：关「内置订阅源」一下少约 150 个频道，在数字里只算 1 个，得单独说。 */
+        /**
+         * 摘要下面的额外提醒：关「内置订阅源」一下少约 150 个频道，在数字里只算 1 个，得单独说；
+         * 要打开的模块里有声明 enableNotice 的（辽宁：只放行部分网络），把那句话也列出来——
+         * 卡片开关会先弹确认，批量勾选不弹，至少在点「应用」之前看得到。
+         */
         function extractorBulkWarning(changes) {
-            return changes.contentFlags.enableBuiltInSubscriptions === false
-                ? '含「内置订阅源」：约 150 个精选频道将不再出现在播放列表里，随时可以开回来。'
-                : '';
+            const notes = [];
+            if (changes.contentFlags.enableBuiltInSubscriptions === false) {
+                notes.push('含「内置订阅源」：约 150 个精选频道将不再出现在播放列表里，随时可以开回来。');
+            }
+            for (const module of (extractorsState && extractorsState.modules) || []) {
+                if (changes.modules[module.id] === true && module.enableNotice) notes.push(`「${module.name}」：${module.enableNotice}`);
+            }
+            return notes.join(' ');
         }
 
         /** bulkToggle 请求体：modules 总是带（只改内置源时是空对象），contentFlags 没改动就整个不带。 */
@@ -6152,12 +6223,6 @@
                     badge: '海外',
                     description: ['面向大陆以外的频道，默认关闭，需要时手动打开。', { mark: '能不能看取决于网络：海外频道由播放器直连，看播放设备；澳门等后续其他独立模块还要部署的机器能连到大陆以外。' }],
                 },
-                {
-                    id: 'institution',
-                    title: '高校与场馆',
-                    badge: '高校场馆',
-                    description: ['高校、文化场馆、会议论坛、典礼及拍卖机构的官方公开活动直播与录像回放，默认关闭，需要时手动打开。', { mark: '画面经部署的机器转发，会占用服务器带宽；佳士得、富艺斯、易北爱乐还要部署的机器能访问境外网站。' }],
-                },
             ];
             return categories;
         }
@@ -6232,8 +6297,7 @@
 
             // 分类按钮：数量跟着上面的开关筛选走；某类里有模块抓取失败或凭证失效，按钮上挂红点
             const categoryOf = m => m.category || 'standard';
-            // 高校与场馆先统一分类；尚未接入模块时也保留入口，明确展示接入状态。
-            const present = categories.filter(category => category.id === 'institution' || modules.some(m => categoryOf(m) === category.id));
+            const present = categories.filter(category => modules.some(m => categoryOf(m) === category.id));
             const active = present.find(category => category.id === extractorCategory) || present[0];
             const needsAttention = m => {
                 const h = m.health || {};
@@ -6290,9 +6354,7 @@
                     </div>
                     ${activeModules.length
                         ? modulesHtml(activeModules)
-                        : `<div class="extractor-filter-empty">${active.id === 'institution' && !modules.some(m => categoryOf(m) === active.id)
-                            ? '暂未接入高校与场馆模块。'
-                            : extractorFilter === 'on'
+                        : `<div class="extractor-filter-empty">${extractorFilter === 'on'
                                 ? '这一类的模块都关着。切到「已关闭」或「全部」，勾选「启用」即可打开。'
                                 : '这一类没有关闭的模块。'}</div>`}
                 </section>`;
@@ -6403,6 +6465,7 @@
                 </div>`;
 
             // 助手随展开区一起重建，每次渲染后重新挂一次
+            initYouTubeSubscriptions();
             initMiguBookmarklet();
             initFengshowsBookmarklet();
             initSichuanBookmarklet();
@@ -6451,6 +6514,17 @@
         }
 
         async function toggleExtractorModule(id, on) {
+            // 声明了 enableNotice 的模块（辽宁：官方只放行部分网络）先确认；取消就把开关拨回去，不发请求
+            const module = ((extractorsState && extractorsState.modules) || []).find(m => m.id === id);
+            if (on && module && module.enableNotice
+                && !(await showConfirm(module.enableNotice, `打开「${module.name}」前请确认`))) {
+                const toggle = document.querySelector(`[data-extractor-id="${CSS.escape(id)}"] .source-card-toggle input`);
+                if (toggle) {
+                    toggle.checked = false;
+                    toggle.focus({ preventScroll: true });
+                }
+                return;
+            }
             const r = await extractorPost({ action: 'toggleModule', id, enabled: on });
             if (r && r.success && extractorFilter !== 'all') extractorFilterHold.add(id);
             applyExtractorResult(r, on ? '模块已启用' : '模块已关闭');
@@ -8107,7 +8181,11 @@
             return externalConfig;
         }
 
+        // 各源最近一次拉取失败的记账（服务端内存态，随 GET /api/external-sources 的 fetchStatus 带下来，
+        // 按源 id 存 { failCount, lastError, nextRetryAt }）。单独存放、不进 externalConfig，整份保存时不会被 POST 回去
+        let externalFetchStatus = {};
         function normalizeExternalConfig(payload) {
+            if (payload && payload.fetchStatus && typeof payload.fetchStatus === 'object') externalFetchStatus = payload.fetchStatus;
             const data = payload && payload.data !== undefined ? payload.data : payload || {};
             if (Array.isArray(data)) {
                 return {
@@ -8685,6 +8763,9 @@
                 // 订阅模式：填写m3u播放列表URL，自动解析多频道
                 const channelCount = (source.parsedChannels && source.parsedChannels.length) || 0;
                 const channelInfo = channelCount > 0 ? `<div class="form-hint" style="color: #52c41a;">\u2714 已解析 ${channelCount} 个频道（上次更新: ${source.lastUpdated ? new Date(source.lastUpdated).toLocaleString() : '从未'}\uff09</div>` : '';
+                // 上次拉取失败了就说明原因和下次重试时间：「上次更新」只记成功，光看它不知道这个源已经拉不到了
+                const fetchFail = source.id ? externalFetchStatus[source.id] : null;
+                const fetchFailInfo = fetchFail ? `<div class="form-hint" style="color: #fa8c16;">\u26a0 上次拉取失败（第 ${fetchFail.failCount} 次）：${escapeHtml(String(fetchFail.lastError || '').slice(0, 200))}。${new Date(fetchFail.nextRetryAt).toLocaleTimeString()} 后自动重试</div>` : '';
                 detail.innerHTML = `
                     <div class="external-detail-header">
                         <div class="external-detail-title">${source.name || '未命名订阅'}</div>
@@ -8715,7 +8796,7 @@
                             <textarea oninput="updateExternalField(${index}, 'subscriptionContent', this.value)" placeholder="选择本地 .m3u/.m3u8/.txt 文件，或直接把播放列表内容粘贴到这里（支持 m3u/m3u8 与 txt「频道名,地址」格式，自动识别 GBK/UTF-8 编码）" style="width: 100%; min-height: 120px; font-family: monospace; font-size: 12px; box-sizing: border-box;">${(source.subscriptionContent || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>
                             <div class="form-hint">选择文件或粘贴内容后，点下方「导入并保存」即可解析入库；本地导入不发起网络请求</div>
                             `}
-                            ${channelInfo}
+                            ${channelInfo}${fetchFailInfo}
                         </div>
                         <div class="external-field">
                             <label>User-Agent（可选）</label>
@@ -8732,6 +8813,20 @@
                             </label>
                             <div class="form-hint">默认关闭。开启后，网页播放由服务器携带上方 UA 及频道自带请求头获取清单和视频分片，会占用服务器视频带宽；订阅内容和电视播放方式不变。修改后点「导入并保存」。</div>
                         </div>
+                        ${!source.localImport ? `
+                        <div class="external-field">
+                            <div class="external-field-row">
+                                <div>
+                                    <label>拉取超时（秒，可选）</label>
+                                    <input type="number" min="${SUBSCRIPTION_FETCH_RANGES.fetchTimeout[0]}" max="${SUBSCRIPTION_FETCH_RANGES.fetchTimeout[1]}" step="1" value="${escapeHtml(String(source.fetchTimeout ?? ''))}" onchange="setSubscriptionFetchField(${index}, 'fetchTimeout', this)" placeholder="15">
+                                </div>
+                                <div>
+                                    <label>失败重试（次，可选）</label>
+                                    <input type="number" min="${SUBSCRIPTION_FETCH_RANGES.fetchRetries[0]}" max="${SUBSCRIPTION_FETCH_RANGES.fetchRetries[1]}" step="1" value="${escapeHtml(String(source.fetchRetries ?? ''))}" onchange="setSubscriptionFetchField(${index}, 'fetchRetries', this)" placeholder="0">
+                                </div>
+                            </div>
+                            <div class="form-hint">总是「请求超时」时再调。超时从发起请求算到列表下载完，留空 15 秒，可填 5–120；重试留空为不重试，最多 3 次，只对超时、连接中断、服务器忙（5xx / 429）重试，404 这类直接算失败。GitHub raw 地址会依次试 5 条线路、每条各算一次超时，重试对它不生效。设得越大，这个源拉不到时其它源的自动刷新等得越久。</div>
+                        </div>` : ''}
                         <div class="external-field">
                             <label>默认分组</label>
                             ${renderGroupSelect(index, source.group || '未分组')}
@@ -9200,6 +9295,25 @@
             }
         }
 
+        // 订阅源「拉取超时 / 失败重试」（issue #223）。范围与服务端 externalSources.js 的
+        // SUBSCRIPTION_FETCH_LIMITS 一致：服务端也会再夹一次，这里夹是为了让输入框显示的就是实际生效的值
+        const SUBSCRIPTION_FETCH_RANGES = { fetchTimeout: [5, 120], fetchRetries: [0, 3] };
+        function setSubscriptionFetchField(index, field, input) {
+            const [min, max] = SUBSCRIPTION_FETCH_RANGES[field];
+            const raw = String(input.value || '').trim();
+            const n = Number(raw);
+            if (raw === '' || !Number.isFinite(n)) {
+                // 留空 = 用默认值：删掉字段，而不是存一个 0 / 空串
+                input.value = '';
+                delete externalConfig.sources[index][field];
+                setSaveDirty('ext');
+                return;
+            }
+            const value = Math.min(max, Math.max(min, Math.round(n)));
+            input.value = String(value);
+            updateExternalField(index, field, value);
+        }
+
         function updateExternalField(index, field, value) {
             externalConfig.sources[index][field] = value;
             // 只写了页面副本，服务端还不知道 —— 标记「欠按保存」。
@@ -9507,10 +9621,11 @@
                         renderChannels();
                     }
                 } else {
-                    showStatus(`${sourceName} 导入失败: ${result.message || '未知错误'}`, 'error');
+                    // 失败信息里带着「已尝试哪些线路」和「可以调大拉取超时」这类要照着做的话，3 秒读不完
+                    showStatus(`${sourceName} 导入失败: ${result.message || '未知错误'}`, 'error', 10000);
                 }
             } catch (error) {
-                showStatus(`${sourceName} 导入失败: ${error.message}`, 'error');
+                showStatus(`${sourceName} 导入失败: ${error.message}`, 'error', 10000);
             } finally {
                 updatingSourceIndex = null;
                 renderExternalSources();
@@ -10146,6 +10261,17 @@ if(success){
                 redirectTo: moved && moved.entry !== window.location.pathname ? moved.entry : null,
                 portChanged: !!(moved && moved.portChanged),
             });
+        }
+
+        async function cleanCoreDumps() {
+            try {
+                const res = await fetch(API_PREFIX + '/api/core-dumps/clean', { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message || '清理失败');
+                showStatus(data.count ? `已清理 ${data.count} 个文件，释放 ${(data.bytes / 1024 / 1024).toFixed(1)} MB` : '没有需要清理的文件', 'success');
+            } catch (e) {
+                showStatus('清理失败: ' + e.message, 'error');
+            }
         }
 
         // ===== 配置备份 / 迁移（issue #99）=====

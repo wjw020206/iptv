@@ -145,7 +145,7 @@ await check('分类元数据抽成 extractorCategories：卡片区与弹窗共�
   assert.ok(start > 0)
   const block = admin.slice(start, admin.indexOf('];', start))
   const ids = [...block.matchAll(/id: '([^']+)'/g)].map(match => match[1])
-  assert.deepEqual(ids, ['account', 'live', 'standard', 'overseas', 'institution'])
+  assert.deepEqual(ids, ['account', 'live', 'standard', 'overseas'])
   const render = functionSource('renderExtractors')
   assert.match(render, /const categories = extractorCategories\(\);/)
   assert.doesNotMatch(render, /const categories = \[/, '分类只能有一份')
@@ -155,7 +155,7 @@ await check('分类元数据抽成 extractorCategories：卡片区与弹窗共�
   const context = vm.createContext({})
   vm.runInContext(functionSource('extractorCategories'), context)
   assert.deepEqual(plain(context.extractorCategories()).map(c => [c.id, c.title]),
-    [['account', '账号与授权'], ['live', '网络直播平台'], ['standard', '免账号模块'], ['overseas', '海外'], ['institution', '高校与场馆']])
+    [['account', '账号与授权'], ['live', '网络直播平台'], ['standard', '免账号模块'], ['overseas', '海外']])
 })
 
 await check('弹窗标记沿用提醒列表的模式：dialog 语义、关闭按钮、Esc 与遮罩关闭、提示文案', () => {
@@ -207,41 +207,6 @@ await check('快照与分节：缺省内置源视为开，分类顺序同卡片�
   ])
   // 没有模块的分类不出空节
   assert.deepEqual(plain(h.context.extractorBulkSections({ modules: [{ id: 'x', name: 'X', category: 'live' }] })).map(s => s.id), ['live', '__builtin'])
-})
-
-await check('高校与场馆统一归类到海外后，批量开关不落入其他分类，空分类不占弹窗', () => {
-  const state = stateOf()
-  state.modules.push(
-    { id: 'campus', name: '高校影像', category: 'institution', enabled: true },
-    { id: 'stages', name: '音乐厅', category: 'institution', enabled: false },
-  )
-  const h = bulkHarness(state)
-  const sections = plain(h.context.extractorBulkSections(state))
-  assert.deepEqual(sections.slice(-3).map(section => [section.id, section.title]),
-    [['overseas', '海外'], ['institution', '高校与场馆'], ['__builtin', '内置源']])
-  assert.deepEqual(sections.find(section => section.id === 'institution').items.map(item => item.id), ['campus', 'stages'])
-  assert.equal(sections.some(section => section.id === '__other'), false)
-  assert.equal(plain(h.context.extractorBulkSections(stateOf())).some(section => section.id === 'institution'), false)
-})
-
-await check('尚未接入高校与场馆时分类入口仍显示，三种开关筛选均说明未接入', () => {
-  const box = { innerHTML: '' }, count = { textContent: '' }
-  const context = vm.createContext({
-    document: { getElementById: id => id === 'extractorList' ? box : id === 'sourceTabExtractorCount' ? count : null },
-    extractorsState: stateOf(), selectedExtractorId: null,
-    extractorFilter: 'all', extractorFilterHold: new Set(), extractorCategory: 'institution', extractorOpenRegions: new Set(),
-    renderExtractorNotice() {}, renderContentFlags() {}, syncExtractorBulkBase() {}, renderAlerts() {}, renderExtractorFilter() {}, renderExtractorDetail() {},
-  })
-  vm.runInContext(['escapeHtml', 'extractorCategories', 'renderExtractors'].map(functionSource).join('\n'), context)
-  for (const filter of ['all', 'on', 'off']) {
-    context.extractorFilter = filter
-    context.renderExtractors()
-    assert.match(box.innerHTML, /aria-selected="true"[^>]*onclick="setExtractorCategory\('institution'\)"/)
-    assert.ok(box.innerHTML.indexOf("setExtractorCategory('overseas')") < box.innerHTML.indexOf("setExtractorCategory('institution')"))
-    assert.match(box.innerHTML, /高校与场馆<span class="extractor-filter-count">0<\/span>/)
-    assert.match(box.innerHTML, /暂未接入高校与场馆模块。/)
-    assert.doesNotMatch(box.innerHTML, /这一类的模块都关着|这一类没有关闭的模块/)
-  }
 })
 
 await check('issue #189：全不选后只勾回央视频 / 凤凰 / 咪咕，一次请求只带真正要改的', async () => {
@@ -456,6 +421,64 @@ await check('名字和 id 一律转义，id 只进 data-*，不拼进 onclick �
   }
   h.click(`x"y'z`, false)
   assert.equal(h.summary(), '将关闭 1 个')
+})
+
+const NOTICE = '官方接口曾经只放行辽宁本地网络，请自行辨别。'
+const withNoticeModule = enabled => {
+  const state = stateOf()
+  state.modules.push({ id: 'liaoning', name: '辽宁', category: 'standard', enabled, enableNotice: NOTICE })
+  return state
+}
+
+await check('批量勾上声明了 enableNotice 的模块，摘要下面列出那句话；关它或不动它都不提示', () => {
+  const h = bulkHarness(withNoticeModule(false))
+  h.context.openExtractorBulk()
+  assert.equal(h.elements.extractorBulkWarning.hidden, true)
+  h.click('liaoning', true)
+  assert.equal(h.elements.extractorBulkWarning.hidden, false)
+  assert.equal(h.elements.extractorBulkWarning.textContent, `「辽宁」：${NOTICE}`)
+  h.context.setExtractorBulkAll(false)
+  assert.doesNotMatch(h.elements.extractorBulkWarning.textContent, /辽宁/, '勾掉后提示跟着消失')
+  assert.match(h.elements.extractorBulkWarning.textContent, /约 150 个精选频道/)
+
+  const on = bulkHarness(withNoticeModule(true))
+  on.context.openExtractorBulk()
+  on.click('liaoning', false)
+  assert.equal(on.elements.extractorBulkWarning.hidden, true, '关掉不需要确认网络')
+})
+
+await check('卡片开关：声明了 enableNotice 的模块先确认，取消不发请求并把开关拨回去', async () => {
+  const toggle = { checked: true, focused: 0, focus() { this.focused++ } }
+  const confirms = [], posts = [], applied = []
+  let answer = false
+  const context = vm.createContext({
+    extractorsState: withNoticeModule(false),
+    extractorFilter: 'all', extractorFilterHold: new Set(),
+    CSS: { escape: value => value },
+    document: { querySelector: selector => (selector.includes('data-extractor-id="liaoning"') || selector.includes('data-extractor-id="gdtv"') ? toggle : null) },
+    showConfirm: async (message, title) => { confirms.push([message, title]); return answer },
+    extractorPost: async request => { posts.push(plain(request)); return { success: true } },
+    applyExtractorResult: (r, message) => applied.push(message),
+  })
+  vm.runInContext(functionSource('toggleExtractorModule'), context)
+
+  await context.toggleExtractorModule('liaoning', true)
+  assert.deepEqual(confirms, [[NOTICE, '打开「辽宁」前请确认']])
+  assert.deepEqual(posts, [], '取消就不打开')
+  assert.equal(toggle.checked, false)
+  assert.equal(toggle.focused, 1)
+
+  answer = true
+  toggle.checked = true
+  await context.toggleExtractorModule('liaoning', true)
+  assert.deepEqual(posts, [{ action: 'toggleModule', id: 'liaoning', enabled: true }])
+  assert.deepEqual(applied, ['模块已启用'])
+
+  confirms.length = 0
+  await context.toggleExtractorModule('liaoning', false)
+  await context.toggleExtractorModule('gdtv', true)
+  assert.deepEqual(confirms, [], '关闭、以及没声明提示的模块都不弹')
+  assert.equal(posts.length, 3)
 })
 
 console.log(`\n全部通过：${passed} 项`)

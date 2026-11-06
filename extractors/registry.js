@@ -18,16 +18,18 @@
  *   description           string  后台一句话说明
  *   category              string  可选；后台源管理分组。'account' 表示带账号/
  *                                 授权能力，'live' 表示网络直播平台，'overseas' 表示
- *                                 面向大陆以外、默认关闭的海外模块；'institution' 表示
- *                                 高校、文化场馆与活动来源，后台排在海外之后；不声明即
+ *                                 面向大陆以外、默认关闭的海外模块；不声明即
  *                                 'standard'（免账号的普通官方抓取模块）
  *   defaultEnabled        boolean 可选；用户没在卡片上点过开关时开不开，不声明即开。
  *                                 只有面向海外、在大陆连不上或常卡顿的模块写 false
  *                                 （海外频道、澳门），由用户自己打开；频道量大、只有本地少数人
  *                                 看的市县模块也可以（山东市县，两百来台按地市分组；市县台各省模块）；
- *                                 高校与场馆（institution）以点播录像为主、媒体全经本机转发，也一律默认关；福建百视通以重复频道备用为主，按用户要求默认关；各模块在海外的
+ *                                 福建百视通以重复频道备用为主，按用户要求默认关；WebSports 来自第三方赛事网站，不进默认内容；各模块在海外的
  *                                 实测见仓库根目录 OVERSEAS.md。v4.29.0 及以前已有的模块
  *                                 在存量配置里多已落成 enabled:true，改它们的默认值要另写迁移
+ *   enableNotice          string  可选；用户在后台打开这个模块前要看的一句话。卡片开关先弹确认，
+ *                                 点「取消」不打开；「批量开关」里勾上它，摘要下面列出这句话。
+ *                                 给能不能播看部署网络的模块用（辽宁）；默认开的模块，用户关掉后再打开才看得到
  *   capabilities          object  { cache: 'disk'|'memory'|'none',
  *                                   resolve: boolean, epg: boolean }
  *   catalogVersion        number  可选；代码内置频道表变更时递增。缓存版本不一致会在
@@ -56,7 +58,8 @@
  *   streamType            string  可选；默认 hls，flv 由本机流式代理且不转码。
  *                                 FLV resolve 须返回 validateMediaUrl 校验官方调度跳转。
  *   capabilities.catchup boolean 可选；false 表示纯直播，不透传回看查询参数。
- *   configSchema          array   字段描述，后台据此渲染表单、后端据此校验
+ *   configSchema          array   字段描述，后台据此渲染表单、后端据此校验。值会进请求头的
+ *                                 文本字段声明 headerValue: true，保存时去首尾空白、拦下非法字符
  *   credentialCheck       object  要登录的模块（有 secret 字段或 browserLoginFlow）必需：
  *                                 { refresh: 刷新时检查凭证并报 meta.credentialRejected,
  *                                   playback: 播放时发现并经 credentialRejected(config) 上报,
@@ -105,6 +108,9 @@
  *       异常等于请求永远不 res.end()、客户端挂死到超时。
  *       解析结果的缓存由模块自己管（TTL 往往是签名有效期这种平台属性）。
  *
+ *   groupsFromConfig(config) 可选。纯本地目录在保存配置时同步重建，停用期间的修改也进入频道缓存。
+ *   playbackRequiresEnabled 为真时，停用模块也关闭已收藏的频道地址和已发出的媒体地址。
+ *   fetchProxyMedia(ref, config, url, options) 可选。签名在连续播放中到期时，重取同一场次、轨道和分片。
  *   claimsRef(ref) → boolean
  *       capabilities.resolve 为真时必需。判断某个 ref 是不是自己的，
  *       播放请求靠它路由到模块。
@@ -163,6 +169,7 @@
  */
 import bilibiliLive from './bilibili-live/index.js'
 import douyinLive from './douyin-live/index.js'
+import youtubeLive from './youtube-live/index.js'
 import asianLive from './asian-live/index.js'
 import anhui from './anhui/index.js'
 import beijing from './beijing/index.js'
@@ -172,6 +179,7 @@ import chengdu from './chengdu/index.js'
 import sichuanCities from './sichuan-cities/index.js'
 import cztv from './cztv/index.js'
 import dalian from './dalian/index.js'
+import liaoning from './liaoning/index.js'
 import douyuLive from './douyu-live/index.js'
 import fjtv from './fjtv/index.js'
 import bestvFj from './bestv-fj/index.js'
@@ -179,6 +187,7 @@ import fengshows from './fengshows/index.js'
 import gansu from './gansu/index.js'
 import gdtv from './gdtv/index.js'
 import gdsportEvents from './gdsport-events/index.js'
+import websports from './websports/index.js'
 import gztv from './gztv/index.js'
 import hangzhou from './hangzhou/index.js'
 import gzstv from './gzstv/index.js'
@@ -233,12 +242,11 @@ import tdm from './tdm/index.js'
 import guangdianyunModules from './guangdianyun/index.js'
 import shandongCounties from './shandong-counties/index.js'
 import overseas from './overseas/index.js'
-import { institutionModules } from './institution/index.js'
 
 // 模块 id 会进 sourceId 并写进 EXTINF 属性值，不消毒就是注入面。
 // 与 utils/configBackupAPI.js 的文件名白名单同款约束。
 export const MODULE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
-export const MODULE_CATEGORIES = new Set(['account', 'live', 'standard', 'overseas', 'institution'])
+export const MODULE_CATEGORIES = new Set(['account', 'live', 'standard', 'overseas'])
 
 const MODULES = [
   // 顺序即后台展示顺序，也是 channelMerger 的合并顺序（先到的分组优先保留）
@@ -251,8 +259,10 @@ const MODULES = [
   asianLive,
   bilibiliLive,
   douyinLive,
+  youtubeLive,
   huyaLive,
   douyuLive,
+  websports,
   anhui,
   beijing,
   chongqing,
@@ -260,6 +270,7 @@ const MODULES = [
   chengdu,
   sichuanCities,
   dalian,
+  liaoning,
   gansu,
   gdtv,
   gdsportEvents,
@@ -316,8 +327,6 @@ const MODULES = [
   shandongCounties,
   // 市县台（广电云，按省拆成 20 个模块）跟在各省级、地市模块之后：并进同省分组时排在省台、市台后面
   ...guangdianyunModules,
-  // 独立机构分组；后台分类顺序由 extractorCategories 决定，显示在海外之后。
-  ...institutionModules,
   // 海外频道排最后：并进体育、文旅等现有分组时，跟在各台官方频道后面
   overseas,
 ]
@@ -335,6 +344,9 @@ export function validateModule(module) {
   }
   if (module.defaultEnabled != null && typeof module.defaultEnabled !== 'boolean') {
     throw new Error(`抓取模块 ${module.id} 的 defaultEnabled 必须是布尔值`)
+  }
+  if (module.enableNotice != null && (typeof module.enableNotice !== 'string' || !module.enableNotice.trim())) {
+    throw new Error(`抓取模块 ${module.id} 的 enableNotice 必须是非空字符串`)
   }
   if (module.category != null && !MODULE_CATEGORIES.has(module.category)) {
     throw new Error(`抓取模块 ${module.id} 的 category 非法: ${JSON.stringify(module.category)}`)

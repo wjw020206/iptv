@@ -20,6 +20,13 @@ RUN apk add --no-cache \
     ttf-freefont \
     || echo "Chromium not available on this architecture, web scraping will be disabled"
 
+# YouTube 只用公开 HLS。两个纯 Python 包配合镜像中的 Node 处理播放器 JS。
+COPY extractors/youtube-live/requirements.txt /tmp/youtube-requirements.txt
+RUN apk add --no-cache python3 py3-pip \
+  && python3 -m venv /opt/youtube \
+  && /opt/youtube/bin/pip install --no-cache-dir -r /tmp/youtube-requirements.txt \
+  && ln -s /opt/youtube/bin/yt-dlp /usr/local/bin/yt-dlp
+
 # 设置时区
 ENV TZ=Asia/Shanghai
 RUN apk add --no-cache tzdata \
@@ -60,5 +67,7 @@ VOLUME ["/iptv/data", "/migu/data"]
 
 # 通过 tini 启动，确保僵尸进程被回收、信号被正确转发
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD [ "node", "app.js" ]
+# 关掉 core dump：宿主机 core_pattern 是相对路径时，Chromium 每崩一次都往 /iptv 写几十 MB，
+# 落在容器层、重启不消失。exec 后 node 仍是 tini 的直接子进程，浏览器子进程继承这个限制
+CMD [ "sh", "-c", "ulimit -c 0; exec node app.js" ]
 

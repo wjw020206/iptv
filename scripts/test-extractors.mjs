@@ -615,9 +615,9 @@ await checkAsync('mapLimit：保持顺序，且并发不超过上限', async () 
 check('全网失败判失败、全体没开播判成功——决定要不要清空用户的频道', () => {
   // 两者都产出 0 个频道。断网时若被记成「成功抓到 0 个」，上一轮缓存会被空结果
   // 覆盖，用户的频道消失且不退避重试。
-  assert.equal(shouldFailRound(0, 3), true, '一条没成功且有真错误 → 判失败，保留上一轮缓存')
-  assert.equal(shouldFailRound(0, 0), false, '全部没开播 → 正常的 0 条，如实写出')
-  assert.equal(shouldFailRound(2, 5), false, '有成功的就不算整轮失败，失败的那几间进 skipped')
+  assert.equal(shouldFailRound(0, 3), true, '一间在播的都没有且有真错误 → 判失败，保留上一轮缓存')
+  assert.equal(shouldFailRound(0, 0), false, '全部没开播 → 正常结果，如实写出')
+  assert.equal(shouldFailRound(2, 5), false, '有在播的就不算整轮失败，失败的那几间进 skipped')
 })
 
 check('播放路由：裸数字归咪咕，认不出的 ref 无人认领', () => {
@@ -773,7 +773,7 @@ check('深圳广电模块已注册，固定周期刷新且逐路径签名流必�
 check('省市广电模块卡片只显示地区名，不带平台品牌', () => {
   const expectedNames = {
     'gdsport-events': '广东体育赛事', 'sichuan-cities': '四川市州',
-    anhui: '安徽', chongqing: '重庆', sichuan: '四川', chengdu: '成都', cztv: '浙江', dalian: '大连', fjtv: '福建', gansu: '甘肃', gdtv: '广东', gxtv: '广西',
+    anhui: '安徽', liaoning: '辽宁', chongqing: '重庆', sichuan: '四川', chengdu: '成都', cztv: '浙江', dalian: '大连', fjtv: '福建', gansu: '甘肃', gdtv: '广东', gxtv: '广西',
     gztv: '广州', hbtv: '湖北', hebtv: '河北', heilongjiang: '黑龙江', hnntv: '海南', hntv: '河南',
     iqilu: '山东', hangzhou: '杭州', ningbo: '宁波', jiaxing: '嘉兴', taizhou: '台州', shaoxing: '绍兴', 'zhejiang-local': '浙江地方台', jlntv: '吉林', jstv: '江苏', jxntv: '江西', kankanews: '上海', 'meizhou-hakka': '梅州', mgtv: '湖南', njtv: '南京', nmtv: '内蒙古',
     'quanzhou-minnan': '泉州', 'quanzhou-county': '晋江、石狮', putian: '莆田', ningde: '宁德', wuxi: '无锡', yangzhou: '扬州', nantong: '南通', yancheng: '盐城',
@@ -994,33 +994,23 @@ try {
     for (const id of ['migu', 'beijing', 'fengshows', 'sichuan', 'yangshipin']) {
       assert.equal(modules.find(module => module.id === id)?.category, 'account', `${id} 应归入账号与授权`)
     }
-    for (const id of ['bilibili-live', 'huya-live', 'douyu-live']) {
+    for (const id of ['bilibili-live', 'huya-live', 'douyu-live', 'youtube-live']) {
       assert.equal(modules.find(module => module.id === id)?.category, 'live', `${id} 应归入网络直播平台`)
     }
     // 默认关、由用户自己打开的：「海外」小节那几个，加上频道量大、只有本地少数人看的山东市县（#196 作者拍板）
-    // 和市县台的各省模块（guangdianyun-*，同样作者拍板）；高校与场馆全部默认关（v4.51.1 作者拍板）。
+    // 和市县台的各省模块（guangdianyun-*，同样作者拍板）。
     assert.deepEqual(
       listModules().filter(module => module.defaultEnabled === false).map(module => module.id).sort(),
       [
         ...modules.filter(module => module.category === 'overseas').map(module => module.id),
-        ...modules.filter(module => module.category === 'institution').map(module => module.id),
         'shandong-counties',
         'bestv-fj',
+        'websports',
+        'youtube-live',
         ...modules.filter(module => module.id.startsWith('guangdianyun-')).map(module => module.id),
       ].sort(),
     )
     assert.deepEqual(modules.filter(module => module.category === 'overseas').map(module => module.id).sort(), ['overseas', 'tdm'])
-    const institutionIds = [
-      'inst-xjtu', 'inst-jlu', 'inst-chnmuseum', 'inst-shqyg', 'inst-zjwhg', 'inst-culturecloud',
-      'inst-fudan', 'inst-bnu', 'inst-hust', 'inst-gdwhg', 'inst-hnwhg', 'inst-gzdjy', 'inst-ccom',
-      'inst-shlib', 'inst-cdstm', 'inst-stvf', 'inst-siff', 'inst-zgc', 'inst-shforum',
-      'inst-phillips', 'inst-elb', 'inst-smartedu', 'inst-movie1905', 'inst-weibo', 'inst-mgtv-events',
-    ]
-    assert.deepEqual(modules.filter(module => module.category === 'institution').map(module => module.id).sort(), institutionIds.sort(),
-      '25 个来源各自注册为独立模块，统一归入高校与场馆')
-    for (const id of institutionIds) assert.equal(modules.find(module => module.id === id)?.category, 'institution', id)
-    assert.equal(new Set(modules.filter(module => module.category === 'institution').map(module => module.name)).size, 25,
-      '机构显示名应独立，不合并成跨机构模块')
   })
 
   check('模块地区透传给后台：省台、地市台、景观归到同一地区，全国性的不归', () => {
@@ -1033,7 +1023,7 @@ try {
     assert.equal(regionOf['asian-live'], '国际')
     assert.equal(regionOf.livechina, '直播中国')
     assert.equal(regionOf.ipanda, 'iPanda')
-    for (const id of ['yangshipin', 'overseas']) assert.equal(regionOf[id], '', id)
+    for (const id of ['yangshipin', 'overseas', 'youtube-live']) assert.equal(regionOf[id], '', id)
     const state = newManager().getState().modules
     assert.equal(state.find(module => module.id === 'iqilu').regionIsArea, true)
     assert.equal(state.find(module => module.id === 'livechina').regionIsArea, false)
@@ -1069,16 +1059,14 @@ try {
       '用户明确保存的关闭态不能被默认值覆盖')
   })
 
-  check('★ 百视通、海外频道、高校与场馆、澳门、山东市县、市县台默认关闭，用户打开后保持打开；没点过的开关不落盘', () => {
+  check('★ 百视通、海外频道、澳门、山东市县、市县台默认关闭，用户打开后保持打开；没点过的开关不落盘', () => {
     const optIn = listModules().filter(module => module.defaultEnabled === false).map(module => module.id)
     const gdy = optIn.filter(id => id.startsWith('guangdianyun-'))
     assert.ok(gdy.length >= 20, '市县台各省模块都默认关闭')
     assert.equal(listModules().filter(module => module.id.startsWith('guangdianyun-')).length, gdy.length)
-    const inst = optIn.filter(id => id.startsWith('inst-'))
-    assert.equal(inst.length, 25, '高校与场馆 25 个来源都默认关闭')
-    assert.deepEqual(optIn.filter(id => !id.startsWith('guangdianyun-') && !id.startsWith('inst-')).sort(),
-      ['bestv-fj', 'overseas', 'shandong-counties', 'tdm'],
-      '百视通因出口可用性差异默认关闭；其余默认关闭模块保持不变')
+    assert.deepEqual(optIn.filter(id => !id.startsWith('guangdianyun-')).sort(),
+      ['bestv-fj', 'overseas', 'shandong-counties', 'tdm', 'websports', 'youtube-live'],
+      '百视通因出口可用性差异默认关闭；WebSports 来自第三方赛事网站；其余默认关闭模块保持不变')
     const manager = newManager(undefined, { modules: {}, masterSwitchRetired: true })
     for (const id of optIn) assert.equal(manager.isModuleEnabled(getModule(id)), false, id)
     manager.setModuleEnabled('overseas', true)
@@ -1782,6 +1770,36 @@ try {
     assert.equal(health.lastSuccessAt, null, '旧轮的记账不能冻结「配置已变更、立刻重抓」')
   })
 
+  await checkAsync('★ 频道表和上一轮一样 → changed:false，变了 → changed:true（issue #222）', async () => {
+    // 回归：5 分钟 tick 此前只看「刷新成功」就重写播放列表。延迟解析的模块（广西每 30 分钟）
+    // 每轮抓回的都是同一份 deferredRef，等于反复重写一字未变的列表、刷五十多行日志。
+    const manager = newManager()
+    manager.setModuleEnabled('bilibili-live', true)
+    const module = getModule('bilibili-live')
+    const origFetch = module.fetch
+    let groups = oneGroup
+    // 每轮都给新对象：真实模块每次都是现拼的，判定必须比内容、不能比引用
+    module.fetch = async () => ({ groups: JSON.parse(JSON.stringify(groups)) })
+    const run = async (m = manager) => (await m.updateAll({ forceAll: true, onlyId: 'bilibili-live' })).results[0]
+    try {
+      assert.equal((await run()).changed, true, '冷缓存第一次抓到频道就是变化')
+      const same = await run()
+      assert.equal(same.success, true)
+      assert.equal(same.changed, false, '内容没变不该触发重新生成')
+
+      // 重启后磁盘缓存 JSON 往返一次，再抓到同样内容也还是没变
+      const restarted = new ExtractorManager()
+      restarted.configPath = manager.configPath
+      restarted.cachePath = manager.cachePath
+      restarted.legacyConfigPath = manager.legacyConfigPath
+      restarted.load()
+      assert.equal((await run(restarted)).changed, false, '读回磁盘缓存后比对不该失真')
+
+      groups = [{ ...oneGroup[0], dataList: [{ ...oneGroup[0].dataList[0], url: 'https://cdn/b.m3u8' }] }]
+      assert.equal((await run()).changed, true, '地址变了必须重新生成')
+    } finally { module.fetch = origFetch }
+  })
+
   check('listSourceIds 不按模块开关过滤——「配置档 ↔ 源」的绑定行要留在矩阵里', () => {
     // 回归：按 isModuleEnabled 过滤的话，关掉模块后它的绑定行从矩阵消失，开回来
     // 得重设一遍（app.js /api/source-profiles 的注释明确要求「绑定关系要留着」）。
@@ -1923,6 +1941,31 @@ await checkAsync('★ B 站：热门榜获取失败且无手填 → 整轮判失
   // 上一轮频道被覆盖成空且不退避。timeoutMs=1 模拟断网：现在必须抛。
   const config = resolveConfig(bili, {})
   await assert.rejects(() => bili.fetch(config, { timeoutMs: 1 }), /失败/)
+})
+
+await checkAsync('B 站：手填房间没开播也列出「主播 · 未开播」；只剩占位又有真出错时整轮判失败', async () => {
+  const rooms = {
+    5440: { room_id: 5440, uid: 9, title: '上一场的标题', live_status: 0 },
+    21144080: { room_id: 21144080, uid: 7, title: 'KPL 总决赛', live_status: 1 },
+  }
+  const anchors = { 9: { uname: '离线主播', face: 'https://i0.hdslb.com/off.jpg' }, 7: { uname: '哔哩哔哩赛事', face: 'https://i0.hdslb.com/face.jpg' } }
+  const { fetchImpl: liveFixture } = biliApiFixture()
+  const fetchImpl = async (raw, init) => {
+    const url = new URL(String(raw))
+    if (url.pathname === '/room/v1/Room/get_info') return { ok: true, status: 200, json: async () => ({ code: 0, data: rooms[url.searchParams.get('room_id')] }) }
+    if (url.pathname === '/live_user/v1/Master/info') return { ok: true, status: 200, json: async () => ({ code: 0, data: { info: anchors[url.searchParams.get('uid')] } }) }
+    return liveFixture(raw, init)
+  }
+  const fetched = await bili.fetch(resolveConfig(bili, { rooms: '5440\n21144080', topAreas: '' }), { fetchImpl })
+  assert.deepEqual(fetched.groups[0].dataList.map(c => [c.deferredRef, c.name, c.logo, c.relayHls]), [
+    ['bili-5440', '离线主播 · 未开播', 'https://i0.hdslb.com/off.jpg', true],
+    ['bili-21144080', '[超清] 哔哩哔哩赛事 · KPL 总决赛', 'https://i0.hdslb.com/face.jpg', true],
+  ])
+  // 热门榜挂了、手填的又都没开播：整轮判失败保上一轮缓存（热门榜频道不能被冲掉）
+  const roomApis = ['/room/v1/Room/get_info', '/live_user/v1/Master/info']
+  const failing = async (raw, init) => roomApis.includes(new URL(String(raw)).pathname)
+    ? fetchImpl(raw, init) : Promise.reject(new Error('connect refused'))
+  await assert.rejects(bili.fetch(resolveConfig(bili, { rooms: '5440' }), { fetchImpl: failing }), /本轮无一成功/)
 })
 
 await checkAsync('B 站：刷新时检查登录态，失效进提醒中心但频道照抓；网络失败不冤枉登录态', async () => {
@@ -2076,7 +2119,7 @@ check('虎牙：官网 H5 签名算法固定样本一致', () => {
 check('虎牙：默认配置控制数量与人气，所有频道固定放入虎牙组', () => {
   const areas = huya.configSchema.find(field => field.key === 'topAreas')
   assert.equal(areas.type, 'multiselect')
-  assert.deepEqual(areas.options.map(option => option.value), ['赛事', '网游', '手游', '单机', '娱乐'])
+  assert.deepEqual(areas.options.map(option => option.value), ['赛事', '网游', '手游', '单机', '娱乐', '一起看'])
   assert.deepEqual(parseHuyaAreaNames(areas.default), ['赛事'])
   assert.equal(huya.configSchema.find(field => field.key === 'topPerArea').default, 8)
   assert.equal(huya.configSchema.find(field => field.key === 'minHeat').default, DEFAULT_MIN_HEAT)
@@ -2155,6 +2198,36 @@ await checkAsync('虎牙：模块抓取赛事卡片，播放时才刷新签名�
   assert.equal(upstream.hits.page, 1, '房间页 60 秒内只取一次')
   assert.equal(upstream.hits.manifest.AL, 2, '每次播放请求都重新取清单')
   assert.equal(upstream.hits.segment.AL, 1, '已选中的线路不再逐次探分片')
+})
+
+await checkAsync('虎牙：手填房间没开播也列出「主播 · 未开播」，不存在的房间号照旧跳过；只剩占位又有真出错时整轮判失败', async () => {
+  // 实测（2026-11-04）：未开播页的播放器配置里没有流，主播资料在 TT_PROFILE_INFO；不存在的房间号这份资料是空的
+  const offlinePage = profile => `<script>var TT_PROFILE_INFO = ${JSON.stringify(profile)};</script>
+<script>var hyPlayerConfig = { stream: ${JSON.stringify({ data: [], vMultiStreamInfo: [] })} };</script>`
+  const offline = offlinePage({ nick: '离线主播', avatar: 'http://img.example/a.jpg', profileRoom: 520520 })
+  const missing = offlinePage({ nick: '', avatar: '', profileRoom: 0 })
+  assert.throws(() => parseHuyaRoomPage(offline, 'saonan'), error => error.name === 'HuyaOfflineError'
+    && error.room.roomId === '520520' && error.room.nick === '离线主播' && error.room.logo === 'https://img.example/a.jpg')
+  assert.throws(() => parseHuyaRoomPage(missing, '17091'), error => error.name === 'HuyaRoomMissingError' && /17091 不存在/.test(error.message))
+
+  const pages = { '/saonan': offline, '/17091': missing, '/660101': huyaPlayerHtml }
+  const fetchImpl = async raw => {
+    const url = new URL(String(raw))
+    const html = pages[url.pathname]
+    return { ok: !!html, status: html ? 200 : 503, url: url.href, text: async () => html || '' }
+  }
+  const fetched = await huya.fetch(resolveConfig(huya, { rooms: 'saonan\n17091\n660101', topPerArea: 0 }), { fetchImpl })
+  assert.deepEqual(fetched.groups[0].dataList.map(c => [c.deferredRef, c.name, c.logo]), [
+    ['huya-520520', '离线主播 · 未开播', 'https://img.example/a.jpg'],
+    ['huya-660101', '虎牙测试直播', 'https://img.example/room.jpg'],
+  ])
+  assert.deepEqual(fetched.meta.warnings, ['虎牙房间 17091 不存在或已注销'])
+  // 填错一个、其余都没开播：照样列出「未开播」，不判整轮失败
+  const typoOnly = await huya.fetch(resolveConfig(huya, { rooms: 'saonan\n17091', topPerArea: 0 }), { fetchImpl })
+  assert.deepEqual(typoOnly.groups[0].dataList.map(c => c.name), ['离线主播 · 未开播'])
+  assert.deepEqual(typoOnly.meta.warnings, ['虎牙房间 17091 不存在或已注销'])
+  await assert.rejects(huya.fetch(resolveConfig(huya, { rooms: 'saonan', topAreas: '赛事', topPerArea: 8 }), { fetchImpl }),
+    /虎牙分类「赛事」抓取失败/, '分类抓失败时不能拿「未开播」占位冲掉上一轮缓存')
 })
 
 await checkAsync('虎牙：首选线路清单被拒即换下一条线路，分片被拒的线路同样跳过，被拒线路 5 分钟内不再碰', async () => {
@@ -2323,7 +2396,7 @@ check('斗鱼：只接受官方 CDN 的 HLS 地址', () => {
 check('斗鱼：默认配置控制分类、数量、人气与画质，所有频道固定放入斗鱼组', () => {
   const areas = douyu.configSchema.find(field => field.key === 'topAreas')
   assert.equal(areas.type, 'multiselect')
-  assert.deepEqual(areas.options.map(option => option.value), ['全部', '网游竞技', '单机热游', '手游休闲', '娱乐'])
+  assert.deepEqual(areas.options.map(option => option.value), ['全部', '网游竞技', '单机热游', '手游休闲', '娱乐', '一起看'])
   assert.deepEqual(parseDouyuAreaNames(areas.default), ['网游竞技'])
   assert.equal(douyu.configSchema.find(field => field.key === 'topPerArea').default, 8)
   assert.equal(douyu.configSchema.find(field => field.key === 'minHeat').default, DEFAULT_DOUYU_MIN_HEAT)
@@ -2333,6 +2406,63 @@ check('斗鱼：默认配置控制分类、数量、人气与画质，所有频�
     [{ roomId: '1', name: '重复' }, { roomId: '2', name: '自动' }],
   ).map(room => room.name), ['手填', '自动'])
   assert.equal(DOUYU_GROUP, '斗鱼')
+})
+
+await checkAsync('斗鱼：手填房间没开播也列出「主播 · 未开播」；只剩占位又有真出错时整轮判失败', async () => {
+  const offlineHtml = `<html><body><script id="vike_pageContext" type="application/json">${JSON.stringify({
+    pageProps: { room: { roomInfo: { roomInfo: {
+      rid: 606118, roomName: '今天休息不播', nickname: '离线主播', avatar: '//img.example/avatar.jpg', isLive: 0,
+    } } } },
+  })}</script></body></html>`
+  assert.throws(() => parseDouyuMobileRoomPage(offlineHtml, '606118'), error => error.name === 'DouyuOfflineError'
+    && error.room.roomId === '606118' && error.room.nick === '离线主播' && error.room.logo === 'https://img.example/avatar.jpg')
+  const pages = { '/606118': offlineHtml, '/9999': douyuMobileHtml }
+  const fetchImpl = async raw => {
+    const url = new URL(String(raw))
+    const html = pages[url.pathname]
+    return { ok: !!html, status: html ? 200 : 503, text: async () => html || '' }
+  }
+  const fetched = await douyu.fetch(resolveConfig(douyu, { rooms: '606118\n9999', topPerArea: 0 }), { fetchImpl })
+  assert.deepEqual(fetched.groups[0].dataList.map(c => [c.deferredRef, c.name, c.logo]), [
+    ['douyu-606118', '离线主播 · 未开播', 'https://img.example/avatar.jpg'],
+    ['douyu-9999', '陪伴每一天', 'https://img.example/cover.jpg'],
+  ])
+  assert.deepEqual(fetched.meta.warnings, [])
+  await assert.rejects(douyu.fetch(resolveConfig(douyu, { rooms: '606118', topPerArea: 8 }), { fetchImpl }),
+    /斗鱼分类「网游竞技」抓取失败/, '分类抓失败时不能拿「未开播」占位冲掉上一轮缓存')
+})
+
+await checkAsync('虎牙一起看：先核对房号、分区和当前节目，再取人气前几名', async () => {
+  const rows = [
+    { lProfileRoom: 11342412, sIntroduction: '周星驰电影解说', sGameFullName: '一起看', lTotalCount: 9000 },
+    { lProfileRoom: 23740156, sIntroduction: '庆余年2', sGameFullName: '原创', lTotalCount: 8000 },
+    { lProfileRoom: 11342384, sIntroduction: '今晚闲聊', sGameFullName: '一起看', lTotalCount: 7000 },
+    { lProfileRoom: 999, sIntroduction: '纪晓岚', sGameFullName: '一起看', lTotalCount: 6000 },
+    { lProfileRoom: 11342396, sIntroduction: '铁齿铜ya纪晓岚 经典铁三角组合', sGameFullName: '一起看', lTotalCount: 5000 },
+  ]
+  const config = resolveConfig(huya, { topAreas: '一起看', topPerArea: 1 })
+  const result = await huya.fetch(config, { fetchImpl: async url => {
+    assert.equal(String(url), 'https://www.huya.com/g/2135')
+    return new Response('var ALL_LIST_DATA = ' + JSON.stringify(rows) + ';')
+  } })
+  assert.deepEqual(result.groups[0].dataList.map(room => room.deferredRef), ['huya-11342396'])
+})
+
+await checkAsync('斗鱼一起看：去掉跨区推荐、改播和低人气房，全部不符时返回空组', async () => {
+  const rows = [
+    { rid: 4549169, rn: '橙記 港剧间', c2name: '原创IP', ol: 90000 },
+    { rid: 431460, rn: '【贝贝】亮剑花絮', c2name: '一起看', ol: 80000 },
+    { rid: 501, rn: '亮剑', c2name: '一起看', ol: 70000 },
+    { rid: 12655359, rn: '神探狄仁杰', c2name: '一起看', ol: 60000 },
+  ]
+  const ctx = { fetchImpl: async url => {
+    assert.equal(String(url), 'https://www.douyu.com/gapi/rknc/directory/mixListV1/2_208/1')
+    return Response.json({ code: 0, data: { rl: rows } })
+  } }
+  const config = resolveConfig(douyu, { topAreas: '一起看', minHeat: 55000 })
+  const result = await douyu.fetch(config, ctx)
+  assert.deepEqual(result.groups[0].dataList.map(room => room.deferredRef), ['douyu-12655359'])
+  assert.deepEqual((await douyu.fetch({ ...config, minHeat: 65000 }, ctx)).groups, [])
 })
 
 await checkAsync('斗鱼：模块抓取分类热门房间，播放时匿名刷新短效 HLS 并要求清单中继', async () => {

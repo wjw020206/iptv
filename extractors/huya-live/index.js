@@ -5,6 +5,7 @@ import {
   DEFAULT_QUALITY,
   HUYA_GROUP,
   HuyaOfflineError,
+  HuyaRoomMissingError,
   QUALITY_OPTIONS,
   clearResolveCache,
   fetchRoom,
@@ -46,7 +47,8 @@ export function mergeRooms(manual, automatic) {
 
 function toChannel(room) {
   return {
-    name: room.name || `虎牙 ${room.roomId}`,
+    // 未开播的手动房间照样列出，播放时现查
+    name: room.offline ? `${room.nick || `虎牙 ${room.roomId}`} · 未开播` : room.name || `虎牙 ${room.roomId}`,
     deferredRef: `huya-${room.roomId}`,
     // 防盗链请求头由本机清单中继发送；不下发给播放器，TXT/TVBox 订阅也能保留。
     // 清单由模块每次播放请求取回并随结果交给中继，线路被拒时才能当场换线。
@@ -76,7 +78,7 @@ export default {
       type: 'multiselect',
       options: Object.keys(AREA_PAGES).map(value => ({ value, label: value })),
       default: '赛事',
-      hint: '默认只选「赛事」，避免首次启用就加入大量普通游戏主播。想只用手动房间，把下面数量设为 0。',
+      hint: '默认只选「赛事」。「一起看」从官网专区挑选已核验的影视正片房间，按当前标题和最低人气筛选。只用手动房间时，每类数量填 0。',
     },
     {
       key: 'topPerArea',
@@ -108,7 +110,7 @@ export default {
       type: 'text',
       multiline: true,
       placeholder: '660101\nhttps://www.huya.com/660101\n# 井号开头是注释',
-      hint: '数字房间号和英文房间短名都支持。未开播房间会自动跳过，手填房间排在自动分类之前。',
+      hint: '数字房间号和英文房间短名都支持。手填房间排在自动分类之前；没开播的也会列出，名字带「未开播」，主播开播后直接能播，名字等下次刷新更新。',
       default: '',
     },
     {
@@ -132,7 +134,10 @@ export default {
       try {
         return await fetchRoom(room, { timeoutMs: ctx.timeoutMs, fetchImpl: ctx.fetchImpl })
       } catch (error) {
-        if (!(error instanceof HuyaOfflineError)) hardErrors++
+        // 未开播的手动房间也列出：频道播放时现查，主播开播后不用等下次刷新就能播
+        if (error instanceof HuyaOfflineError && error.room) return error.room
+        // 填错的房间号同未开播：提示并跳过，不算真出错
+        if (!(error instanceof HuyaOfflineError) && !(error instanceof HuyaRoomMissingError)) hardErrors++
         warnings.push(error.message)
         return null
       }
@@ -155,7 +160,8 @@ export default {
     }
 
     const rooms = mergeRooms(manual, automatic)
-    if (!rooms.length && hardErrors > 0) throw new Error(warnings[0] || '虎牙直播抓取失败')
+    // 「未开播」占位不算抓到：只剩它们又有真出错时整轮判失败、保上一轮缓存，和改之前一样
+    if (!rooms.some(room => !room.offline) && hardErrors > 0) throw new Error(warnings[0] || '虎牙直播抓取失败')
     return {
       groups: rooms.length ? [{ name: HUYA_GROUP, dataList: rooms.map(toChannel) }] : [],
       meta: { skipped: warnings, warnings },

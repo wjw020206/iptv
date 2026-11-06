@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import vm from 'node:vm'
 import fetch from 'node-fetch'
 import { qualityFrom } from '../../utils/qualityOverride.js'
+import { isWatchTogetherFilm } from '../watchTogether.js'
 
 export const DOUYU_GROUP = '斗鱼'
 export const REFERER = 'https://m.douyu.com/'
@@ -25,6 +26,7 @@ export const AREA_APIS = Object.freeze({
   单机热游: 'https://www.douyu.com/gapi/rkc/directory/mixListV1/1_15/1',
   手游休闲: 'https://www.douyu.com/gapi/rkc/directory/mixListV1/1_9/1',
   娱乐: 'https://www.douyu.com/gapi/rkc/directory/mixListV1/1_2/1',
+  一起看: 'https://www.douyu.com/gapi/rknc/directory/mixListV1/2_208/1',
 })
 
 // 斗鱼网页播放器没有登录时使用的固定设备号。它不是账号凭据，只是匿名设备标识；
@@ -43,9 +45,11 @@ export class DouyuError extends Error {
 }
 
 export class DouyuOfflineError extends DouyuError {
-  constructor(message) {
+  /** room：未开播房间的主播名和头像，手动房间靠它照样列出频道。 */
+  constructor(message, room = null) {
     super(message)
     this.name = 'DouyuOfflineError'
+    this.room = room
   }
 }
 
@@ -153,6 +157,7 @@ export async function topRoomsOfArea(areaName, limit, options = {}) {
   const response = await fetchResponse(url, options)
   const rooms = normalizeCategoryPayload(await response.json())
   return rooms
+    .filter(room => areaName !== '一起看' || isWatchTogetherFilm('douyu', room, room.category))
     .filter(room => room.heat >= Number(options.minHeat || 0))
     .sort((a, b) => b.heat - a.heat)
     .slice(0, Math.max(0, Number(limit) || 0))
@@ -171,7 +176,14 @@ export function parseMobileRoomPage(html, requestedRoom = '') {
   const info = context?.pageProps?.room?.roomInfo?.roomInfo
   if (!info || !info.rid) throw new DouyuError(`斗鱼房间 ${requestedRoom || ''} 数据不完整`.trim())
   const roomId = normalizeRoom(info.rid)
-  if (Number(info.isLive) !== 1) throw new DouyuOfflineError(`斗鱼房间 ${roomId} 当前未开播`)
+  if (Number(info.isLive) !== 1) {
+    throw new DouyuOfflineError(`斗鱼房间 ${roomId} 当前未开播`, {
+      roomId,
+      nick: String(info.nickname || '').trim(),
+      logo: String(info.avatar || info.roomSrc || '').replace(/^\/\//, 'https://'),
+      offline: true,
+    })
+  }
   const signerCode = String(context?.crptext || '')
   if (!signerCode.includes('function ub98484234')) {
     throw new DouyuError('斗鱼房间页缺少匿名播放签名函数')

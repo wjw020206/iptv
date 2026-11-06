@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import fetch from 'node-fetch'
 import { printYellow } from '../../utils/colorOut.js'
 import { qualityFrom } from '../../utils/qualityOverride.js'
+import { isWatchTogetherFilm } from '../watchTogether.js'
 
 export const HUYA_GROUP = '虎牙'
 export const REFERER = 'https://www.huya.com/'
@@ -26,6 +27,7 @@ export const AREA_PAGES = Object.freeze({
   手游: 'https://www.huya.com/g/100004',
   单机: 'https://www.huya.com/g/100002',
   娱乐: 'https://www.huya.com/g/100022',
+  一起看: 'https://www.huya.com/g/2135',
 })
 
 const RESOLVE_TTL_MS = 60 * 1000          // 房间页与签名地址复用时长
@@ -50,10 +52,23 @@ export class HuyaError extends Error {
   }
 }
 
-export class HuyaOfflineError extends HuyaError {
+/**
+ * 房间号不存在或已注销（多半是填错了）。和「未开播」一样只记提示、跳过不列，
+ * 不算这一轮真出错：否则填错一个、其余主播又都没开播时整轮判失败，正确房间的「未开播」也出不来。
+ */
+export class HuyaRoomMissingError extends HuyaError {
   constructor(message) {
     super(message)
+    this.name = 'HuyaRoomMissingError'
+  }
+}
+
+export class HuyaOfflineError extends HuyaError {
+  /** room：未开播房间的主播名和头像，手动房间靠它照样列出频道。 */
+  constructor(message, room = null) {
+    super(message)
     this.name = 'HuyaOfflineError'
+    this.room = room
   }
 }
 
@@ -257,7 +272,31 @@ export async function topRoomsOfArea(areaName, limit, options = {}) {
   if (!url) throw new HuyaError(`未知分类「${areaName}」`)
   const html = await fetchText(url, options)
   const rooms = areaName === '赛事' ? parseEventRooms(html) : parseCategoryRooms(html)
-  return selectTopRooms(rooms, limit, options.minHeat)
+  const candidates = areaName === '一起看' ? rooms.filter(room => isWatchTogetherFilm('huya', room, room.game)) : rooms
+  return selectTopRooms(candidates, limit, options.minHeat)
+}
+
+/**
+ * 未开播时播放器配置里没有流，主播昵称和头像只在 TT_PROFILE_INFO。房间号不存在的页面
+ * 同样没有流，但这份资料是空的（profileRoom 为 0）——要和「未开播」分开，免得填错的房间号被列出来。
+ */
+function offlineRoom(html, requestedRoom) {
+  let profile
+  try { profile = extractAssignedJson(html, 'var TT_PROFILE_INFO') } catch {
+    // 页面改版找不到这份资料：退回只报未开播、不列出
+    return new HuyaOfflineError(`虎牙房间 ${requestedRoom || ''} 当前未开播`.trim())
+  }
+  const nick = decodeHtml(profile?.nick).trim()
+  const profileRoom = String(profile?.profileRoom || '')
+  if (!nick || !/^[1-9]\d*$/.test(profileRoom)) {
+    return new HuyaRoomMissingError(`虎牙房间 ${requestedRoom || ''} 不存在或已注销`.trim())
+  }
+  return new HuyaOfflineError(`虎牙房间 ${requestedRoom || ''} 当前未开播`.trim(), {
+    roomId: normalizeRoom(profileRoom),
+    nick,
+    logo: normalizeImage(profile.avatar),
+    offline: true,
+  })
 }
 
 /** 只截取 hyPlayerConfig.stream；外层是 JS 对象，不是严格 JSON。 */
@@ -270,7 +309,7 @@ export function parseRoomPage(html, requestedRoom = '') {
   const stream = extractAssignedJson(html, streamMarker[0], markerAt)
   const rows = Array.isArray(stream?.data) ? stream.data : []
   const row = rows.find(item => Array.isArray(item?.gameStreamInfoList) && item.gameStreamInfoList.length)
-  if (!row) throw new HuyaOfflineError(`虎牙房间 ${requestedRoom || ''} 当前未开播`.trim())
+  if (!row) throw offlineRoom(html, requestedRoom)
   const info = row.gameLiveInfo || {}
   const roomId = normalizeRoom(info.profileRoom || requestedRoom || info.uid)
   return {

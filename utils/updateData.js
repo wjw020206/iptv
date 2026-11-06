@@ -18,12 +18,18 @@ import { getDateString } from "./time.js"
 import { fetchUrl } from "./net.js"
 import { dataPath } from "./paths.js"
 import { readMiguTokenState, markMiguTokenRefreshed, MIGU_TOKEN_REFRESH_INTERVAL_MS } from "./miguTokenState.js"
-import { readFileSync, existsSync, statSync } from "node:fs"
+import { readFileSync, existsSync, statSync, readdirSync } from "node:fs"
 import { announcementM3uEntry, announcementTxtEntry } from "./announcement.js"
 import miguDanmaku from "../extractors/migu/danmaku.js"
 import { cosSync } from './cosSync.js'
 
 const PE_CACHE_PATH = dataPath('pe-cache.json')
+
+// 本进程最近一次重新生成 playback.xml 的时间；零点后补刷据此判断今天是否已经刷过（utils/dailyEpgRefresh.js）
+let lastPlaybackBuiltAt = 0
+export function getLastPlaybackBuiltAt() {
+  return lastPlaybackBuiltAt
+}
 
 // 本地台标支持的扩展名（按优先级查找）
 export const LOGO_EXTS = ['png', 'jpg', 'jpeg', 'webp']
@@ -47,6 +53,27 @@ export function findLocalLogo(name) {
 function localLogoVersion(file) {
   try {
     return `?v=${Math.floor(statSync(file).mtimeMs)}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 数据目录 logos/ 的指纹（文件名 + 修改时间）。app.js 的 5 分钟 tick 拿它判断手工放进去的台标
+ * 有没有增删改：台标只在重新生成播放列表时写进 m3u，而 tick 只在源内容变化时才重生成（issue #222），
+ * 不比这一下，手放的图要等全量更新才出现。目录不存在或读不到按空串算，绝不抛。
+ */
+export function localLogosFingerprint() {
+  try {
+    const dir = dataPath('logos')
+    if (!existsSync(dir)) return ''
+    return readdirSync(dir).sort().map(file => {
+      try {
+        return `${file}:${Math.floor(statSync(dataPath(`logos/${file}`)).mtimeMs)}`
+      } catch {
+        return file
+      }
+    }).join('|')
   } catch {
     return ''
   }
@@ -369,6 +396,8 @@ async function updateTV(hours, options = {}) {
   // 节目单抓取失败的频道数。逐个打日志会刷屏（一轮 175 个频道），收尾统一报一次。
   let playbackFailed = 0
   let lastPlaybackError = ''
+  // 本轮写进 m3u 的频道数，快速重生成收尾时汇总成一行
+  let writtenChannels = 0
   for (let i = 0; i < datas.length; i++) {
 
     const data = datas[i].dataList
@@ -469,6 +498,7 @@ async function updateTV(hours, options = {}) {
       // 行内覆盖订阅头的咪咕模板。没有声明时为空串，输出与之前逐字节一致。
       const catchupAttr = renderCatchupAttrs(channelItem)
       appendFileSync(interfacePath, `#EXTINF:-1 tvg-id="${channelItem.name}" tvg-name="${channelItem.name}" tvg-logo="${logoUrl}"${sourceAttr}${catchupAttr} group-title="${datas[i].name}",${channelItem.name}\n${optLines}${playUrl}\n`)
+      writtenChannels++
       // txt：diyp/TVBox 格式只有「频道名,地址」两列，放不下请求头，依赖请求头的
       // 频道写进去必定 403——缺一个台好过一个死台，整条跳过。
       // 判据用 needsOpts 而不是「optLines 是否为空」：只带 network-caching 的频道
@@ -480,8 +510,11 @@ async function updateTV(hours, options = {}) {
       }
       // printGreen(`    节目链接更新成功`)
     }
-    printGreen(`分组:${datas[i].name} 更新完成！`)
+    // 完整更新每组要抓节目单、耗时几秒，逐组一行当进度看；快速重生成整轮不到一秒，
+    // 逐组打就是一次五十多行（issue #222），收尾汇总成一行
+    if (!regenerateOnly) printGreen(`分组:${datas[i].name} 更新完成！`)
   }
+  if (regenerateOnly) printGreen(`已重新生成 ${datas.length} 个分组、${writtenChannels} 个频道`)
 
   if (enableLogoCache) finishLogoCache()
 
@@ -509,6 +542,7 @@ async function updateTV(hours, options = {}) {
     }
     appendFileSync(playbackFile, `</tv>\n`)
     renameFileSync(playbackFile, playbackFile.replace(".bak", ""))
+    lastPlaybackBuiltAt = Date.now()
   }
   renameFileSync(interfacePath, interfacePath.replace(".bak", ""))
   // txt
@@ -516,6 +550,33 @@ async function updateTV(hours, options = {}) {
   printGreen("电视频道更新完成！")
   const end = Date.now()
   printYellow(`电视频道更新耗时: ${(end - start) / 1000}秒`)
+}
+
+/**
+ * 一场比赛的直播条目。basic-data 里常常没有 multiPlayList：还没排好转播的场次、
+ * 咪咕没挂播放清单的场次都是这样——那是「这场暂时没东西可放」，不是抓取失败。
+ * 原本裸取 `.multiPlayList.liveList`，这种场次直接抛，被记成
+ * 「体育赛事有 N 场抓取失败：Cannot read properties of undefined (reading 'liveList')」（issue #222 日志）。
+ *
+ * @param {object} detailBody basic-data 接口的 body
+ * @returns {Array} 直播条目，没有就是空数组
+ */
+export function matchLiveList(detailBody) {
+  const list = detailBody?.multiPlayList?.liveList
+  return Array.isArray(list) ? list : []
+}
+
+/**
+ * 已结束比赛的回放条目：优先回放接口，回落到 basic-data 的 multiPlayList.replayList。
+ * 两处都没有（或回放接口抖动、basic-data 没有 multiPlayList）时返回 null，调用方按「无回放」处理。
+ *
+ * @param {object} replayBody  all-view-list 回放接口的 body（接口失败时为 undefined）
+ * @param {object} detailBody  basic-data 接口的 body
+ * @returns {Array|null}
+ */
+export function matchReplayList(replayBody, detailBody) {
+  const list = replayBody?.replayList ?? detailBody?.multiPlayList?.replayList
+  return Array.isArray(list) ? list : null
 }
 
 /**
@@ -623,6 +684,14 @@ async function updatePE(hours) {
         // updatePE，导致本轮体育频道整批丢失且 pe-cache 不更新。行为与之前逐字节相同，
         // 只是不再依赖那个巧合。
         const peResult = await fetchUrl(`https://vms-sc.miguvideo.com/vms-match/v6/staticcache/basic/basic-data/${data.mgdbId}/miguvideo`)
+        // fetchUrl 失败时返回 undefined 而不抛；明确报出来，别让日志里只剩一句「reading 'body'」。
+        // 「接口回了 JSON 但没有 body」（下架 / 改 ID 的场次回 410）是数据侧的拒绝，不是无响应，
+        // 分开说，别让人去查网络
+        if (!peResult) throw new Error('赛事详情接口无响应')
+        if (!peResult.body) {
+          const code = peResult.code ? `（${peResult.code}${peResult.message ? ' ' + peResult.message : ''}）` : ''
+          throw new Error(`赛事详情接口无数据${code}`)
+        }
         // 比赛已结束
         if (peResult.body.endTime < Date.now()) {
           const replayResult = await fetchUrl(`http://app-sc.miguvideo.com/vms-match/v5/staticcache/basic/all-view-list/${data.mgdbId}/2/miguvideo`)
@@ -630,11 +699,8 @@ async function updatePE(hours) {
           // replayResult 就是 undefined，原写法在这里直接抛，导致下面那段
           // 「回落到 peResult.body.multiPlayList.replayList」的兜底永远走不到，
           // 一场本来有回放数据的比赛被白白丢掉。
-          let replayList = replayResult?.body?.replayList
-          if (replayList == null || replayList == undefined) {
-            replayList = peResult.body.multiPlayList.replayList
-          }
-          if (replayList == null || replayList == undefined) {
+          const replayList = matchReplayList(replayResult?.body, peResult.body)
+          if (replayList == null) {
             printYellow(`${data.mgdbId} ${pkInfoTitle} 无回放`)
             continue
           }
@@ -669,8 +735,7 @@ async function updatePE(hours) {
           continue
         }
         // 比赛未结束
-        const liveList = peResult.body.multiPlayList.liveList
-        for (const live of liveList) {
+        for (const live of matchLiveList(peResult.body)) {
           if (live.name.match(/.*集锦.*/) != null || live.startTimeStr == undefined) {
             continue
           }
