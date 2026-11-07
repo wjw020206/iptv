@@ -3,7 +3,8 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import youtube from '../extractors/youtube-live/index.js'
-import { normalizeYouTubeInput, record, refOf, parseVideo, parseBroadcasts, mediaUrl, parseLive, publicManifest, liveWindow, renewedLink } from '../extractors/youtube-live/api.js'
+import { normalizeYouTubeInput, record, refOf, parseVideoChannel, parseBroadcasts, inspect, mediaUrl, parseLive, publicManifest, liveWindow, renewedLink, videoStatus, ytDlpError, unreachableMessage } from '../extractors/youtube-live/api.js'
+import { topVariantFirst } from '../utils/hlsTopFirst.js'
 import { lookup, toProxyManifest } from '../utils/hlsProxy.js'
 import { ExtractorManager } from '../utils/extractorManager.js'
 
@@ -19,16 +20,104 @@ assert.deepEqual(normalizeYouTubeInput(channelId), {channelUrl:'https://www.yout
 assert.deepEqual(normalizeYouTubeInput('@ABCNews'), normalizeYouTubeInput('youtube.com/@ABCNews/streams'))
 assert.deepEqual(normalizeYouTubeInput('https://youtu.be/' + id), { videoId:id })
 for (const raw of ['https://youtube.com.example/@ABCNews','https://youtube.com@localhost/@x','file:///etc/passwd','@ABCNews\n--proxy','https://youtube.com/watch?v=bad']) assert.throws(() => normalizeYouTubeInput(raw))
+for (const raw of [
+  '  https://m.youtube.com/@ABCNews/streams?si=share  ', '//www.youtube.com/@ABCNews/videos',
+  'youtube.com/@ABCNews/community', 'https://www.youtube.com/@ABCNews/playlists?view=1',
+]) assert.deepEqual(normalizeYouTubeInput(raw), { channelUrl:'https://www.youtube.com/@ABCNews' })
+for (const raw of [`${channelId}`, `https://youtube.com/channel/${channelId}/live`,
+  `https://www.youtube.com/embed/live_stream?channel=${channelId}`, `https://www.youtube-nocookie.com/embed/live_stream?channel=${channelId}`,
+]) assert.deepEqual(normalizeYouTubeInput(raw), { channelUrl:'https://www.youtube.com/channel/' + channelId })
+for (const raw of [
+  `https://www.youtube.com/watch?v=${id}&list=ignored&si=share`, `https://youtube.com/live/${id}?feature=share`,
+  `www.youtu.be/${id}?t=30`, `https://m.youtube.com/shorts/${id}?si=share`,
+  `https://music.youtube.com/watch?v=${id}`, `https://www.youtube-nocookie.com/embed/${id}`,
+  `https://www.youtube.com/v/${id}`, `https://youtube.com/attribution_link?u=${encodeURIComponent('/watch?v=' + id)}`,
+  `https://youtube.com/redirect?q=${encodeURIComponent('https://youtu.be/' + id)}`,
+]) assert.deepEqual(normalizeYouTubeInput(raw), { videoId:id }, raw)
+for (const base of ['/c/ABCNews', '/user/ABCNews', '/ABCNews']) {
+  assert.deepEqual(normalizeYouTubeInput('https://youtube.com' + base + '/streams'), { channelUrl:'https://www.youtube.com' + base })
+}
+assert.deepEqual(normalizeYouTubeInput('https://youtube.com/@中文频道/shorts'), { channelUrl:'https://www.youtube.com/@' + encodeURIComponent('中文频道') })
+for (const raw of ['https://youtube.com:444/@ABCNews', 'https://youtube-nocookie.com/watch?v=' + id,
+  'https://youtube.com/playlist?list=PL123', 'https://youtube.com/feed/subscriptions',
+  'https://youtube.com/redirect?q=https%3A%2F%2Flocalhost%2Fprivate',
+  'https://youtube.com/attribution_link?u=%2F%2Fevil.test%2Fwatch',
+  'https://youtube.com/@ABC%2FNews', 'https://youtube.com/shorts/' + id + '/extra',
+]) assert.throws(() => normalizeYouTubeInput(raw), raw)
 const entries = [event, {...event, live_status:'is_upcoming'}, {...event,live_status:'was_live'}, {...event,channel_id:'foreign'}, {...event,availability:'subscriber_only'}]
 assert.deepEqual(parseBroadcasts({...fixture,entries}, channelId).events.map(e => e.status), ['is_live','is_upcoming'])
 assert.throws(() => parseBroadcasts(fixture, 'foreign'))
 const page = (status, changes={}, live={}) => '<script>var ytInitialPlayerResponse = ' + JSON.stringify({
-  videoDetails:{ videoId:id, channelId, title, isLiveContent:true, ...changes },
+  videoDetails:{ videoId:id, channelId, title, author:'ABC News', isLiveContent:true, ...changes },
   microformat:{playerMicroformatRenderer:{liveBroadcastDetails:live}}, playabilityStatus:{status},
 }) + '; throw new Error();</script>'
-assert.deepEqual(parseVideo(page('OK',{isLive:true}),id),pinned)
-assert.deepEqual(parseVideo(page('LIVE_STREAM_OFFLINE'),id),pinned)
-for (const html of [page('LOGIN_REQUIRED'),page('OK',{videoId:'other-video',isLive:true}),page('OK',{isLiveContent:false}),page('OK',{}, {endTimestamp:'2026-11-03'})]) assert.throws(() => parseVideo(html,id))
+// 所有视频链接都关注发布频道，包括预约、回放、普通视频与 Shorts；不能用视频标题命名频道。
+for (const html of [page('OK',{isLive:true}), page('LIVE_STREAM_OFFLINE'),
+  page('OK',{isLiveContent:false}), page('OK',{}, {endTimestamp:'2026-11-03'})]) {
+  assert.deepEqual(parseVideoChannel(html,id), channel)
+}
+for (const html of [page('OK',{videoId:'other-video'}), page('OK',{channelId:'wrong'}),
+  page('OK',{author:undefined}), '<script>var ytInitialPlayerResponse={"playabilityStatus":{"status":"LOGIN_REQUIRED"}};</script>']) {
+  assert.throws(() => parseVideoChannel(html,id))
+}
+const calls = []
+const reads = {
+  readWatchPage: async video => { calls.push(['watch',video]); return page('OK',{isLiveContent:false}) },
+  readMetadata: async (url,args) => { calls.push(['metadata',url,args]); return fixture },
+}
+const fromVideo = await inspect('https://youtu.be/' + id, { ...reads, includeEvents:false })
+assert.deepEqual(fromVideo, {item:channel,events:[]})
+assert.deepEqual(calls, [['watch',id]], '保存频道不依赖场次列表，未开播也能关注')
+calls.length = 0
+const fromHandle = await inspect('@ABCNews', { ...reads, includeEvents:false })
+assert.equal(refOf(fromHandle.item), refOf(fromVideo.item), '同一频道的不同链接归并到同一订阅')
+assert.deepEqual(calls, [['metadata','https://www.youtube.com/@ABCNews',['--flat-playlist','--playlist-end','1']]])
+calls.length = 0
+const inspected = await inspect('https://youtube.com/shorts/' + id, reads)
+assert.deepEqual(inspected.item, channel)
+assert.equal(inspected.events[0].videoId, id)
+assert.equal(calls[1][1], 'https://www.youtube.com/channel/' + channelId + '/streams', '查看场次查询已确认的所属频道')
+await assert.rejects(inspect('https://youtu.be/' + id, { ...reads,
+  readMetadata: async () => ({...fixture,channel_id:'UCaaaaaaaaaaaaaaaaaaaaaa'}) }), /频道身份/)
+
+// 固定场次状态：后台据此标出已结束 / 失效、可以移除的
+assert.equal(videoStatus(page('OK',{isLive:true}),id),'live')
+assert.equal(videoStatus(page('LIVE_STREAM_OFFLINE',{isUpcoming:true}),id),'upcoming')
+assert.equal(videoStatus(page('OK',{}, {endTimestamp:'2026-11-03'}),id),'ended')
+assert.equal(videoStatus(page('OK',{}),id),'ended','直播内容、不在播也不是预约 = 已结束')
+assert.equal(videoStatus('<script>var ytInitialPlayerResponse = {"playabilityStatus":{"status":"ERROR"}};</script>',id),'unavailable')
+assert.equal(videoStatus(page('LOGIN_REQUIRED',{isLive:false}),id),'unknown','要求登录多半是出口被人机验证，不能据此说场次失效')
+assert.equal(videoStatus('<html>consent</html>',id),'unknown')
+
+// yt-dlp 报错 → 给用户看的原因；连不上时指到「网络代理」
+assert.match(unreachableMessage(false),/网络代理.*填代理地址/)
+assert.match(unreachableMessage(true),/点「测试」/)
+assert.equal(ytDlpError('ERROR: [youtube] x: This live event will begin in 3 hours').message,'这场直播尚未开始或已经结束')
+assert.match(ytDlpError("ERROR: [youtube] x: Sign in to confirm you're not a bot").message,/人机验证/)
+assert.match(ytDlpError('ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests').message,/限制了这个出口/)
+assert.match(ytDlpError('ERROR: [youtube] x: Join this channel to get access to members-only content').message,/无法匿名播放/)
+for (const net of ['ERROR: Unable to download webpage: <urlopen error [Errno 111] Connection refused>', 'ERROR: [youtube] x: Read timed out. (read timeout=12.0)',
+  "ERROR: Unable to download API page: ('Cannot connect to proxy.', ConnectionResetError(54, 'Connection reset by peer'))", 'Tunnel connection failed: 502 Bad Gateway']) {
+  assert.match(ytDlpError(net).message,/网络代理/,net)
+}
+assert.match(ytDlpError('',{killed:true}).message,/网络代理/,'30 秒没解析完按网络问题提示')
+assert.match(ytDlpError('ERROR: [youtube] x: Some new extractor failure').message,/检查更新/,'看不懂的失败提示更新解析组件')
+assert.match(ytDlpError('',{code:'ENOENT'}).message,/缺少 yt-dlp/)
+
+// 最高画质上限：只在不超过它的档里取最高；一档都不满足时取最低的视频档；竖屏按短边算
+const ladder = ['#EXTM3U','#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="a.m3u8"',
+  '#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO="a"','360.m3u8',
+  '#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080,AUDIO="a"','1080.m3u8',
+  '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,AUDIO="a"','720.m3u8'].join('\n')
+const picked = (text, maxHeight) => topVariantFirst(text, { highestOnly: true, maxHeight }).split('\n').filter(l => l && !l.startsWith('#'))
+assert.deepEqual(picked(ladder, 0), ['1080.m3u8'])
+assert.deepEqual(picked(ladder, 720), ['720.m3u8'])
+assert.deepEqual(picked(ladder, 1440), ['1080.m3u8'])
+assert.deepEqual(picked(ladder, 240), ['360.m3u8'],'没有符合的档时取最低档，不至于没画面')
+assert.match(topVariantFirst(ladder, { highestOnly: true, maxHeight: 720 }), /GROUP-ID="a"/,'配套音轨保留')
+assert.deepEqual(picked(ladder.replace('1920x1080','1080x1920'), 1080), ['1080.m3u8'],'竖屏 1080×1920 算 1080p')
+const unsorted = topVariantFirst(ladder, { maxHeight: 720 })
+assert.ok(!unsorted.includes('1080.m3u8') && unsorted.indexOf('720.m3u8') < unsorted.indexOf('360.m3u8'),'不固定最高档时也去掉超出上限的档')
 
 const origin = 'https://manifest.googlevideo.com'
 const expiry = Math.floor(Date.now()/1000) + 3600

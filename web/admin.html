@@ -3317,6 +3317,19 @@
         .sys-section-title { font-size: 16px; font-weight: 600; color: var(--ui-text); }
         .sys-section-desc { margin-top: 5px; font-size: 12px; line-height: 1.8; color: var(--ui-muted); }
         .sys-section .system-config-grid { margin-bottom: 0; gap: 20px 28px; }
+        .sys-section .system-config-item.sys-span-all { grid-column: 1 / -1; }
+        .youtube-status { color: var(--ui-text-secondary); }
+        .youtube-status.is-live { color: var(--ui-success); }
+        .youtube-status.is-ended, .youtube-status.is-unavailable { color: var(--ui-warning); }
+        .youtube-ended { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--ui-surface-soft); color: var(--ui-text-secondary); font-size: 12.5px; }
+        .youtube-runtime { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--ui-line); font-size: 12.5px; color: var(--ui-text-secondary); }
+        .sys-proxy-row { display: flex; gap: 8px; align-items: center; }
+        .sys-proxy-row input { flex: 1 1 auto; min-width: 0; }
+        .sys-proxy-row .btn { flex: 0 0 auto; white-space: nowrap; }
+        .sys-proxy-result { margin-top: 8px; font-size: 12px; line-height: 1.8; color: var(--ui-text-secondary); overflow-wrap: anywhere; }
+        .sys-proxy-result:empty { display: none; }
+        .sys-proxy-result .ok { color: var(--ui-success); }
+        .sys-proxy-result .fail { color: var(--ui-danger); }
         .sys-section .system-config-item { padding: 0; border: 0; background: transparent; box-shadow: none; }
         .sys-section .system-config-item label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .sys-section .system-config-item label.sys-check-label { font-weight: 500; cursor: pointer; }
@@ -4714,6 +4727,24 @@
                         </div>
                     </div>
                 </section>
+                <section class="sys-section">
+                    <div class="sys-section-head">
+                        <div class="sys-section-title">网络代理</div>
+                        <div class="sys-section-desc">适用于 YouTube 直播、澳门（澳广视）、海外频道和 Telegram 消息推送。澳门与海外频道有生效代理时，清单和视频分片均经服务器转发，会使用服务器带宽及代理流量；其他模块不使用这里填写的代理。</div>
+                    </div>
+                    <div class="system-config-grid">
+                        <div class="system-config-item sys-span-all">
+                            <label for="sysProxy">代理地址</label>
+                            <div class="sys-proxy-row">
+                                <input type="text" id="sysProxy" oninput="setSaveDirty('sysconfig'); invalidateProxyTest()" placeholder="http://192.168.1.10:7890" autocomplete="off" spellcheck="false">
+                                <button type="button" class="btn" id="sysProxyTestBtn" onclick="testProxy()">测试</button>
+                            </div>
+                            <div class="system-config-hint">填 Clash、mihomo、OpenClash 等代理软件的 HTTP、SOCKS5 或混合端口，如 <code>http://192.168.1.10:7890</code>、<code>socks5://192.168.1.10:7891</code>；有账号密码的写成 <code>http://用户名:密码@192.168.1.10:7890</code>。账号或密码中的 <code>%</code>、<code>@</code>、<code>#</code> 分别写成 <code>%25</code>、<code>%40</code>、<code>%23</code>。代理软件要打开「允许局域网连接」；Docker 用桥接网络时 <code>127.0.0.1</code> 指容器自己，要填代理所在机器的局域网 IP。播放设备不用设代理。点「测试」不用先保存，测试后仍需保存才生效。测试检查代表性接口与清单，不代表全部频道均可播放。</div>
+                            <div class="system-config-hint sys-env-hint" id="sysProxyEnvHint" hidden>检测到环境变量或系统代理：这里留空时沿用它，填写后以这里为准。</div>
+                            <div class="sys-proxy-result" id="sysProxyResult" aria-live="polite"></div>
+                        </div>
+                    </div>
+                </section>
                 <div class="system-config-hint" style="margin:0 0 10px;">标了「需重启」的项保存后要重启服务才生效；其余项保存即生效。</div>
                 <div class="system-config-actions" style="justify-content:flex-start;">
                     <button class="btn btn-success" data-save-scope="sysconfig" onclick="saveSystemConfig()">保存系统配置</button>
@@ -4813,7 +4844,7 @@
                     <div class="user-guide-card" style="margin-top:10px; padding:12px 14px; background:#f7f9fc; border:1px solid #eef1f6; border-radius:6px; font-size:13px; color:#555; line-height:1.7;">
                         <div>• 模块抓取失败、官方服务故障<strong>不推送</strong>（你处理不了，会自动重试），只在后台提醒里显示；其他提醒出现即发，恢复时再发一条「已恢复」；</div>
                         <div>• 升级前就已存在的提醒不发；同一个问题没恢复前只发一次；</div>
-                        <div>• Telegram 的接口在大陆连不上：部署在大陆需给容器设 <code>HTTPS_PROXY</code>，或在「API 地址」填自己的反代；</div>
+                        <div>• Telegram 的接口在大陆连不上：部署在大陆的到 <a href="javascript:void(0)" onclick="switchSettingsTab(0)">系统配置 → 网络代理</a> 填代理地址，或在「API 地址」填自己的反代；</div>
                         <div>• 企业微信应用：成员在企业微信里收到，关注了企业「微信插件」的在微信里也能收到；2022 年 6 月以后新建的应用要把服务器公网 IP 加进应用的「企业可信IP」，否则发送失败（60020），IP 不固定的在「API 地址」填一台固定 IP 服务器上转发 <code>qyapi.weixin.qq.com</code> 的反代；</div>
                         <div>• 自定义接口：PushPlus、Server酱、WxPusher、ntfy、Gotify 这类发一个 HTTP 请求就能推送的平台都能接；选「自定义接口」后点「按示例填」，再填上密钥，别的平台照它的接口文档改地址和请求体模板；</div>
                         <div>• 机器人地址和 Token 存在数据目录 <code>notify-channels.json</code>，会随「备份迁移」里的配置导出一起导出，别把备份发给别人。</div>
@@ -4909,7 +4940,7 @@
                                 <strong>当前版本</strong>
                             </div>
                             <div class="about-version-body">
-                                <span id="versionText">v4.61.0</span>
+                                <span id="versionText">v4.62.0</span>
                                 <button class="btn btn-sm" onclick="checkUpdate()" id="checkUpdateBtn">检查更新</button>
                             </div>
                             <div id="updateInfo" class="about-update-info" style="display: none;"></div>
@@ -5282,19 +5313,20 @@
                     if (!input.isConnected) return;
                     if (!result.success) { events.textContent = result.message || 'YouTube 请求失败'; return; }
                     if (action !== 'youtubeInspect') {
-                        applyExtractorResult(result, action === 'youtubeRemove' ? '已移除订阅' : '已保存订阅，启用模块后可在 M3U 的 YouTube 直播分组观看');
+                        applyExtractorResult(result, action === 'youtubeRemove' ? '已移除订阅' : '已关注频道，启用模块后可在 M3U 的 YouTube 直播分组观看');
                         return;
                     }
                     events.replaceChildren();
                     const heading = document.createElement('p');
-                    heading.textContent = result.item.name + (result.item.videoId ? ' · 固定场次' : result.events.length ? ' · 当前场次' : ' · 暂无公开直播或预约');
+                    heading.textContent = result.item.name + (result.events.length ? ' · 当前场次' : ' · 暂无公开直播或预约');
+                    const follow = document.createElement('button');
+                    follow.className = 'btn btn-sm'; follow.textContent = '关注此频道';
+                    follow.onclick = () => submit('youtubeAdd', { url: 'https://www.youtube.com/channel/' + result.item.channelId });
+                    heading.append(' ', follow);
                     events.append(heading);
                     for (const event of result.events) {
                         const p = document.createElement('p');
-                        const add = document.createElement('button');
-                        add.className = 'btn btn-sm'; add.textContent = '订阅此场';
-                        add.onclick = () => submit('youtubeAdd', { url: event.url });
-                        p.append((event.status === 'is_live' ? '直播中 · ' : '已预约 · ') + event.name + ' ', add);
+                        p.textContent = (event.status === 'is_live' ? '直播中 · ' : '已预约 · ') + event.name;
                         events.append(p);
                     }
                 } catch { events.textContent = '无法连接源管理接口'; }
@@ -5305,6 +5337,72 @@
             for (const button of document.querySelectorAll('[data-youtube-remove]')) {
                 button.onclick = () => submit('youtubeRemove', { ref: button.dataset.youtubeRemove });
             }
+
+            // 固定场次的状态：结束了的标出来，攒一起给个「全部移除」（场次结束后不会自动删）
+            const STATUS_TEXT = { live: '直播中', upcoming: '已预约', ended: '已结束', unavailable: '已失效（被删除或设为私享）' };
+            const statusSpans = [...document.querySelectorAll('[data-youtube-status]')];
+            if (statusSpans.length) {
+                extractorPost({ action: 'youtubeStatus' }).then(result => {
+                    if (!input.isConnected || !result.success) return;
+                    const done = [];
+                    for (const span of statusSpans) {
+                        const status = result.statuses?.[span.dataset.youtubeStatus];
+                        if (!STATUS_TEXT[status]) continue;
+                        span.textContent = ' · ' + STATUS_TEXT[status];
+                        span.className = 'youtube-status is-' + status;
+                        if (status === 'ended' || status === 'unavailable') done.push(span.dataset.youtubeStatus);
+                    }
+                    const bar = document.getElementById('youtubeEnded');
+                    if (!done.length || !bar) return;
+                    bar.replaceChildren();
+                    const button = document.createElement('button');
+                    button.className = 'btn btn-sm'; button.textContent = `移除这 ${done.length} 场`;
+                    button.onclick = () => submit('youtubeRemove', { refs: done });
+                    bar.append(`有 ${done.length} 场固定场次已经结束或失效，留着打开只会提示已结束。`, button);
+                    bar.hidden = false;
+                }).catch(() => {});
+            }
+
+            // 解析组件（yt-dlp）：打开时只读本机版本；点「检查更新」才去查 PyPI
+            const runtimeText = document.getElementById('youtubeRuntimeText');
+            const checkBtn = document.getElementById('youtubeRuntimeCheck');
+            const updateBtn = document.getElementById('youtubeRuntimeUpdate');
+            const describe = info => info.version ? `解析组件 yt-dlp ${info.version}` : '解析组件 yt-dlp：未安装';
+            async function runtime(op) {
+                checkBtn.disabled = true; updateBtn.disabled = true;
+                if (op !== 'status') runtimeText.textContent = op === 'update' ? '正在更新 yt-dlp，通常半分钟内完成…' : '正在查询最新版本…';
+                try {
+                    const info = await extractorPost({ action: 'youtubeRuntime', op });
+                    if (!runtimeText.isConnected) return;
+                    if (!info.success) {
+                        runtimeText.textContent = info.message || '操作失败';
+                        if (op === 'update') { updateBtn.hidden = false; updateBtn.textContent = '重试更新 / 修复'; }
+                        return;
+                    }
+                    if (op === 'update') {
+                        runtimeText.textContent = info.repaired
+                            ? `解析组件及配套依赖已修复（yt-dlp ${info.version}），立即生效。`
+                            : info.updated
+                            ? `已更新到 yt-dlp ${info.version}，立即生效。拉新镜像重建容器后，以镜像自带的版本为准。`
+                            : `yt-dlp ${info.version} 已是最新版`;
+                        updateBtn.hidden = true;
+                        return;
+                    }
+                    let text = describe(info);
+                    if (info.updating) { runtimeText.textContent = text + '，正在更新…'; updateBtn.hidden = true; return; }
+                    if (info.repairNeeded) text += '，配套依赖不完整，请修复';
+                    else if (op === 'check') text += info.outdated ? `，有新版本 ${info.latest}（${info.latestDate} 发布）` : '，已是最新版';
+                    if (!info.managed && info.reason) text += `。${info.reason}`;
+                    if (op === 'check' && info.pythonNote) text += `（${info.pythonNote}）`;
+                    runtimeText.textContent = text;
+                    updateBtn.hidden = !(info.managed && (info.repairNeeded || (op === 'check' && info.outdated)));
+                    updateBtn.textContent = info.repairNeeded ? '修复依赖' : `更新到 ${info.latest || ''}`;
+                } catch { if (runtimeText.isConnected) runtimeText.textContent = '无法连接源管理接口'; }
+                finally { checkBtn.disabled = false; updateBtn.disabled = false; }
+            }
+            checkBtn.onclick = () => runtime('check');
+            updateBtn.onclick = () => runtime('update');
+            runtime('status');
         }
 
         /**
@@ -5404,14 +5502,18 @@
                 let rows = [];
                 try { const saved = JSON.parse(config.subscriptions || '[]'); if (Array.isArray(saved)) rows = saved; } catch {}
                 return `<div class="bookmarklet-section">
-                    <label for="youtubeInput"><strong>频道或直播场次</strong></label>
-                    <div class="bookmarklet-actions"><input type="text" id="youtubeInput" maxlength="2048" placeholder="用户名（@ 可省略）、频道或直播链接">
+                    <label for="youtubeInput"><strong>关注 YouTube 频道</strong></label>
+                    <div class="bookmarklet-actions"><input type="text" id="youtubeInput" maxlength="2048" placeholder="用户名、频道 ID、频道或视频分享链接">
                     <button class="btn btn-sm" id="youtubeInspect">查看场次</button>
-                    <button class="btn btn-sm btn-primary" id="youtubeAdd">添加订阅</button></div>
-                    <p>频道未开播时保留；多场同播时按官方列表选择第一场，也可单独添加某场直播或预约。</p>
+                    <button class="btn btn-sm btn-primary" id="youtubeAdd">关注频道</button></div>
+                    <p>频道、直播、视频和 Shorts 链接都用于关注所属频道。未开播时保留，播放时选择频道当前的首场公开直播。</p>
                     <div id="youtubeEvents" aria-live="polite"></div>
-                    <div id="youtubeSaved">${rows.length ? '' : '<p>还没有订阅。添加第一个频道后，它会出现在 M3U 的「YouTube 直播」分组。</p>'}${rows.map(row => `<p>${escapeHtml(row.name)} · ${row.videoId ? '固定场次' : '关注频道'}
+                    <div id="youtubeEnded" class="youtube-ended" hidden></div>
+                    <div id="youtubeSaved">${rows.length ? '' : '<p>还没有订阅。添加第一个频道后，它会出现在 M3U 的「YouTube 直播」分组。</p>'}${rows.map(row => `<p>${escapeHtml(row.name)} · ${row.videoId ? '固定场次' : '关注频道'}${row.videoId ? `<span class="youtube-status" data-youtube-status="${escapeHtml(row.videoId)}"></span>` : ''}
                       <button class="btn btn-sm" data-youtube-remove="${escapeHtml(row.videoId || row.channelId)}">移除</button></p>`).join('')}</div>
+                    <div class="youtube-runtime"><span id="youtubeRuntimeText">解析组件 yt-dlp：读取中…</span>
+                      <button class="btn btn-sm" id="youtubeRuntimeCheck">检查更新</button>
+                      <button class="btn btn-sm btn-primary" id="youtubeRuntimeUpdate" hidden>更新</button></div>
                 </div>`;
             }
             if (key === 'fengshows-bookmarklet') {
@@ -5661,9 +5763,19 @@
             // 存储不可用只会失去「记住展开」，默认全收起
         }
 
-        function toggleExtractorRegion(region) {
-            if (extractorOpenRegions.has(region)) extractorOpenRegions.delete(region);
-            else extractorOpenRegions.add(region);
+        // 筛选命中的面板不多时会自动展开（见 renderExtractors），这里记本次筛选里被手动收起的，
+        // 不写进本机存储：换筛选、换分类就作废，免得自动展开的面板点了标题收不起来。
+        const extractorClosedRegions = new Set();
+        const EXTRACTOR_AUTO_OPEN_PANELS = 3;
+
+        function toggleExtractorRegion(region, wasOpen) {
+            if (wasOpen) {
+                extractorOpenRegions.delete(region);
+                extractorClosedRegions.add(region);
+            } else {
+                extractorOpenRegions.add(region);
+                extractorClosedRegions.delete(region);
+            }
             try {
                 localStorage.setItem('iptv-extractor-open-regions', JSON.stringify([...extractorOpenRegions]));
             } catch (e) {
@@ -5675,6 +5787,7 @@
         function setExtractorCategory(id, render = true) {
             extractorCategory = String(id || 'account');
             extractorFilterHold.clear();
+            extractorClosedRegions.clear();
             try {
                 localStorage.setItem('iptv-extractor-category', extractorCategory);
             } catch (e) {
@@ -5686,6 +5799,7 @@
         function setExtractorFilter(value) {
             extractorFilter = ['on', 'off'].includes(value) ? value : 'all';
             extractorFilterHold.clear();
+            extractorClosedRegions.clear();
             try {
                 localStorage.setItem('iptv-extractor-filter', extractorFilter);
             } catch (e) {
@@ -6317,7 +6431,9 @@
 
             // 免账号小节：模块按面板收（省级地区，或国际、直播中国这类专题；只有一个模块的也收，
             // 统一样式，以后加模块直接进来），不归面板的平铺在前。面板标题的数量和红点按整个地区算，不跟筛选走；
-            // 「已启用 / 已关闭」筛选时有命中的面板自动展开，不然筛完还得一个个点开看。
+            // 「已启用 / 已关闭」筛选后只剩少数几个面板时自动展开，不然筛完还得一个个点开看；
+            // 命中的面板多（典型是「已启用」，几乎全中）就照常收着，否则一进页面就是几十个面板全摊开（作者 11-06）。
+            // 自动展开的面板点标题照样能收起。
             const modulesHtml = list => {
                 const grid = items => `<div class="source-grid">${items.map(m => moduleCardHtml(m, active)).join('')}</div>`;
                 if (active.id !== 'standard') return grid(list);
@@ -6327,14 +6443,15 @@
                     ...list.filter(m => m.region && !m.regionIsArea),
                     ...list.filter(m => m.region && m.regionIsArea),
                 ].map(m => m.region))];
+                const autoOpen = extractorFilter !== 'all' && regions.length <= EXTRACTOR_AUTO_OPEN_PANELS;
                 const panels = regions.map(region => {
                     const members = list.filter(m => m.region === region);
                     const all = modules.filter(m => categoryOf(m) === active.id && m.region === region);
-                    const open = extractorFilter !== 'all' || extractorOpenRegions.has(region);
+                    const open = !extractorClosedRegions.has(region) && (autoOpen || extractorOpenRegions.has(region));
                     const alerting = all.some(needsAttention);
                     return `<section class="region-panel${open ? ' open' : ''}">
                         <button type="button" class="region-panel-head" aria-expanded="${open}"
-                                data-region="${escapeHtml(region)}" onclick="toggleExtractorRegion(this.dataset.region)">
+                                data-region="${escapeHtml(region)}" onclick="toggleExtractorRegion(this.dataset.region, this.getAttribute('aria-expanded') === 'true')">
                             <span class="region-panel-caret" aria-hidden="true">›</span>
                             <span class="region-panel-name">${escapeHtml(region)}</span>
                             <span class="region-panel-meta">${all.length} 个模块 · 已开 ${all.filter(m => m.enabled).length}</span>
@@ -6558,7 +6675,7 @@
             // 提示走「立即刷新」，而不是像开关那样自动重生成播放列表。
             const r = await extractorPost(body);
             if (r && r.success) setSaveDirty(`xt:${id}`, false);
-            applyExtractorResult(r, '配置已保存。改动需要重新抓取才生效——点「立即刷新」，或等下一轮自动刷新');
+            applyExtractorResult(r, module.configSavedNotice || '配置已保存。改动需要重新抓取才生效——点「立即刷新」，或等下一轮自动刷新');
         }
 
         // ===== 央视频持久浏览器登录 =====
@@ -9643,8 +9760,11 @@
         // 父子（系统配置是 grid 与 actions 两个兄弟节点），而且模板字符串重渲染会把
         // 按钮整个换掉——所以状态存在这个 Set 里，渲染后重新贴回去（applySaveDirtyMarks）。
         const dirtySaveScopes = new Set();
+        let systemConfigEditVersion = 0;
+        let systemConfigSaving = false;
 
         function setSaveDirty(scope, dirty = true) {
+            if (scope === 'sysconfig' && dirty) systemConfigEditVersion++;
             if (dirty) dirtySaveScopes.add(scope); else dirtySaveScopes.delete(scope);
             applySaveDirtyMarks();
         }
@@ -9718,6 +9838,9 @@
             document.getElementById('sysAdminPath').value = systemConfig.adminPath || 'admin';
             document.getElementById('sysProgramInterval').value = systemConfig.programInfoUpdateInterval || '8';
             document.getElementById('sysEnableDisplayNameUnify').checked = systemConfig.enableDisplayNameUnify === true;
+            document.getElementById('sysProxy').value = systemConfig.proxy || '';
+            document.getElementById('sysProxyEnvHint').hidden = !systemConfig.proxyEnvFallback;
+            invalidateProxyTest();
             renderEnvHints();
         }
 
@@ -10158,6 +10281,13 @@ if(success){
          *   再跳到新入口，顺序反了就是重启静默失败。
          */
         async function saveSystemConfig({ deferRedirect = false } = {}) {
+            if (systemConfigSaving) return false;
+            systemConfigSaving = true;
+            const editVersion = systemConfigEditVersion;
+            // 请求期间锁住本次表单及两个保存按钮，避免重复提交和入口跳转前继续编辑。
+            const controls = [...document.querySelectorAll('#settingsSub0 input, #settingsSub0 select, [data-save-scope="sysconfig"]')]
+                .map(el => ({ el, disabled: el.disabled }));
+            controls.forEach(({ el }) => { el.disabled = true; });
             try {
                 const port = parseInt(document.getElementById('sysPort').value) || 1905;
                 let host = document.getElementById('sysHost').value.trim();
@@ -10181,7 +10311,8 @@ if(success){
                     pass: passInput,
                     adminPath: adminPathInput,
                     programInfoUpdateInterval: document.getElementById('sysProgramInterval').value || '8',
-                    enableDisplayNameUnify: document.getElementById('sysEnableDisplayNameUnify').checked
+                    enableDisplayNameUnify: document.getElementById('sysEnableDisplayNameUnify').checked,
+                    proxy: document.getElementById('sysProxy').value.trim()
                 };
 
                 const response = await fetch(API_PREFIX + '/api/system-config', {
@@ -10213,9 +10344,10 @@ if(success){
                     // 当前入口就是 location.pathname（/admin 或 /密码/admin），直接比对。
                     const entry = result.entry || window.location.pathname;
                     const apiPrefix = result.apiPrefix !== undefined ? result.apiPrefix : API_PREFIX;
+                    const editedWhileSaving = systemConfigEditVersion !== editVersion;
                     const portChanged = String(port) !== String((systemConfig && systemConfig.port) || '');
                     if (entry !== window.location.pathname) {
-                        setSaveDirty('sysconfig', false);
+                        setSaveDirty('sysconfig', editedWhileSaving);
                         if (!deferRedirect) {
                             // 地址明文写进提示并停 5 秒（比原来的 3 秒长）：密码里若有需要 URL 编码的
                             // 字符，浏览器编码后与服务端的原样比对对不上，跳过去会是 404 —— 那时
@@ -10225,7 +10357,11 @@ if(success){
                         }
                         return { entry, apiPrefix, portChanged };
                     }
-                    setSaveDirty('sysconfig', false);
+                    setSaveDirty('sysconfig', editedWhileSaving);
+                    if (editedWhileSaving) {
+                        showStatus('提交时的配置已保存；后续修改尚未保存', 'info');
+                        return false; // 保存并重启不能丢掉后来改的内容
+                    }
                     showStatus(result.message, 'success');
                     return portChanged ? { entry, apiPrefix, portChanged } : true;
                 } else {
@@ -10235,6 +10371,66 @@ if(success){
             } catch (error) {
                 showStatus('保存失败: ' + error.message, 'error');
                 return false;
+            } finally {
+                systemConfigSaving = false;
+                controls.forEach(({ el, disabled }) => { el.disabled = disabled; });
+            }
+        }
+
+        let proxyTestSequence = 0;
+        let proxyTestController = null;
+
+        function invalidateProxyTest() {
+            proxyTestSequence++;
+            proxyTestController?.abort();
+            proxyTestController = null;
+            document.getElementById('sysProxyResult').textContent = '';
+            const btn = document.getElementById('sysProxyTestBtn');
+            btn.disabled = false;
+            btn.textContent = '测试';
+        }
+
+        // 结果只属于发起测试时的输入；输入变化或重新渲染后，旧响应不得覆盖新状态。
+        async function testProxy() {
+            invalidateProxyTest();
+            const sequence = proxyTestSequence;
+            const controller = proxyTestController = new AbortController();
+            const proxy = document.getElementById('sysProxy').value.trim();
+            const isCurrent = () => sequence === proxyTestSequence && proxy === document.getElementById('sysProxy').value.trim();
+            const btn = document.getElementById('sysProxyTestBtn');
+            const out = document.getElementById('sysProxyResult');
+            btn.disabled = true;
+            btn.textContent = '测试中…';
+            out.textContent = '正在测试代理连通性，通常需 10–15 秒…';
+            const timer = setTimeout(() => controller.abort(), 20000);
+            try {
+                const res = await fetch(API_PREFIX + '/api/proxy-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({ proxy })
+                });
+                const data = await res.json();
+                if (!isCurrent()) return;
+                if (!data.success) {
+                    out.innerHTML = `<span class="fail">${escapeHtml(data.message || '测试失败')}</span>`;
+                    return;
+                }
+                const via = { input: '经输入的代理', env: '留空，使用环境变量或系统代理' }[data.via] || '留空，使用直连';
+                out.innerHTML = `<div>${via}：</div>` + (data.results || []).map(r => r.ok
+                    ? `<div class="ok">✓ ${escapeHtml(r.name)} 能连上（${r.ms} 毫秒）</div>`
+                    : `<div class="fail">✗ ${escapeHtml(r.name)}：${escapeHtml(r.message || '连不上')}</div>`).join('');
+            } catch (error) {
+                if (!isCurrent()) return;
+                const message = error.name === 'AbortError' ? '请求超时，请重试' : error.message;
+                out.innerHTML = `<span class="fail">测试失败：${escapeHtml(message)}</span>`;
+            } finally {
+                clearTimeout(timer);
+                if (sequence === proxyTestSequence) {
+                    proxyTestController = null;
+                    btn.disabled = false;
+                    btn.textContent = '测试';
+                }
             }
         }
 

@@ -1,55 +1,80 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { systemProxyUrl, proxyAwareFetch } from '../../utils/systemProxy.js'
+import { outboundFetch, outboundProxyKey, outboundProxyUrl, ytDlpProxyArg } from '../../utils/outboundProxy.js'
+import { ytDlpBinary } from './runtime.js'
 import { fetchUpstreamResponse } from '../../utils/hlsProxy.js'
 import { topVariantFirst } from '../../utils/hlsTopFirst.js'
 import { hasReplaceToken } from '../../utils/replaceToken.js'
 
 const run = promisify(execFile)
-const localBinary = fileURLToPath(new URL('../../.runtime/youtube/bin/yt-dlp', import.meta.url))
 const site = 'https://www.youtube.com'
 const channelPattern = /^UC[\w-]{22}$/
 const handlePattern = /^[\p{L}\p{N}\p{M}_.·-]{1,100}$/u
 const videoPattern = /^[\w-]{11}$/
+const youtubeHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'])
+const shortHosts = new Set(['youtu.be', 'www.youtu.be'])
+const embedHosts = new Set(['youtube-nocookie.com', 'www.youtube-nocookie.com'])
+const channelTabs = /\/(?:featured|streams|live|videos|shorts|about|playlists|community|posts|podcasts|releases|search)$/
+const reservedPaths = new Set(['watch', 'playlist', 'results', 'feed', 'shorts', 'live', 'embed', 'channel', 'c', 'user',
+  'redirect', 'attribution_link', 'clip', 'hashtag', 'premium', 'gaming', 'account', 'settings', 'upload', 'signin', 'logout', 't', 'oembed'])
 const watchUrl = id => site + '/watch?v=' + id
 const channelUrl = id => site + '/channel/' + id
 class NoStreamsTab extends Error {}
 class Offline extends Error {}
 
 export function normalizeYouTubeInput(raw) {
-  const invalid = () => new Error('请输入 YouTube 用户名（@ 可省略）、频道链接或单场直播链接');
-  if (typeof raw !== 'string' || raw.length > 2048 || /[\x00-\x1f\x7f]/.test(raw)) throw invalid();
+  const invalid = () => new Error('请输入 YouTube 用户名（@ 可省略）、频道 ID、频道或视频链接');
+  if (typeof raw !== 'string' || raw.length > 2048) throw invalid();
   let value = raw.trim();
+  if (!value || /[\x00-\x1f\x7f\\]/.test(value)) throw invalid();
   if (channelPattern.test(value)) value = site + '/channel/' + value;
   else if (handlePattern.test(value)) value = site + '/@' + value;
   else if (value.startsWith('@')) value = site + '/' + value;
-  if (/^(?:(?:www\.|m\.)?youtube\.com|youtu\.be)\//i.test(value)) value = 'https://' + value;
-  let url, path;
-  try {
-    url = new URL(value);
-    path = decodeURIComponent(url.pathname).replace(/\/$/, '');
-  } catch { throw invalid(); }
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) throw invalid();
-  let videoId;
-  if (url.hostname === 'youtu.be') videoId = path.slice(1);
-  else {
-    if (!['www.youtube.com', 'youtube.com', 'm.youtube.com'].includes(url.hostname)) throw invalid();
-    if (path === '/watch') videoId = url.searchParams.get('v');
-    else if (/^\/(live|embed)\//.test(path)) videoId = path.split('/').slice(2).join('/');
-    else {
-      const base = path.replace(/\/(?:featured|streams|live|videos|shorts|about)$/, '');
-      if (base.startsWith('/@') && handlePattern.test(base.slice(2))) {
-        return { channelUrl: site + '/@' + encodeURIComponent(base.slice(2)) };
-      }
-      if (base.startsWith('/channel/') && channelPattern.test(base.slice(9))) return { channelUrl: site + base };
-      if (/^\/(?:c|user)\/[\w.-]+$/.test(base)) return { channelUrl: site + base };
+  if (value.startsWith('//')) value = 'https:' + value;
+  if (/^(?:(?:www\.|m\.|music\.)?youtube\.com|(?:www\.)?youtu\.be|(?:www\.)?youtube-nocookie\.com)\//i.test(value)) value = 'https://' + value;
+  return normalizeLink(value);
+
+  function normalizeLink(value, depth = 0) {
+    let url, path;
+    try {
+      url = new URL(value);
+      path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+    } catch { throw invalid(); }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) throw invalid();
+    let videoId;
+    if (shortHosts.has(url.hostname)) videoId = path.slice(1);
+    else if (embedHosts.has(url.hostname)) {
+      if (path === '/embed/live_stream' && channelPattern.test(url.searchParams.get('channel') || '')) return { channelUrl: channelUrl(url.searchParams.get('channel')) };
+      videoId = path.match(/^\/embed\/([\w-]{11})$/)?.[1];
     }
+    else {
+      if (!youtubeHosts.has(url.hostname)) throw invalid();
+      // Decode YouTube's own share wrappers locally; never fetch a redirect target.
+      if (path === '/attribution_link' || path === '/redirect') {
+        const target = url.searchParams.get(path === '/attribution_link' ? 'u' : 'q');
+        if (!target || depth >= 2 || /[\x00-\x1f\x7f\\]/.test(target)) throw invalid();
+        let next;
+        try { next = new URL(target, site).href; } catch { throw invalid(); }
+        return normalizeLink(next, depth + 1);
+      }
+      if (path === '/embed/live_stream' && channelPattern.test(url.searchParams.get('channel') || '')) return { channelUrl: channelUrl(url.searchParams.get('channel')) };
+      if (path === '/watch') videoId = url.searchParams.get('v');
+      else if (/^\/(live|embed|shorts|v)\//.test(path)) videoId = path.split('/').slice(2).join('/');
+      else {
+        const base = path.replace(channelTabs, '');
+        if (base.startsWith('/@') && handlePattern.test(base.slice(2))) {
+          return { channelUrl: site + '/@' + encodeURIComponent(base.slice(2)) };
+        }
+        if (base.startsWith('/channel/') && channelPattern.test(base.slice(9))) return { channelUrl: site + base };
+        const legacy = base.match(/^\/(c|user)\/([^/]+)$/);
+        if (legacy && handlePattern.test(legacy[2])) return { channelUrl: site + '/' + legacy[1] + '/' + encodeURIComponent(legacy[2]) };
+        if (/^\/[\w.-]+$/.test(base) && !reservedPaths.has(base.slice(1).toLowerCase())) return { channelUrl: site + base };
+      }
+    }
+    if (!videoPattern.test(videoId || '')) throw invalid();
+    return { videoId };
   }
-  if (!videoPattern.test(videoId || '')) throw invalid();
-  return { videoId };
 }
 
 // Read the JSON assignment only. The watch page may append other JS in the same script.
@@ -68,21 +93,47 @@ function playerData(html) {
   throw new Error('无法读取 YouTube 直播页面');
 }
 
+/**
+ * 连不上 YouTube 时告诉用户去哪儿改：没配代理的指到「网络代理」，配了的让去点「测试」。
+ * 大陆部署没配代理是最常见的原因，原来那句「检查部署机器的网络」用户不知道该干什么。
+ */
+export function unreachableMessage(proxied = Boolean(outboundProxyUrl())) {
+  return proxied
+    ? '经代理连不上 YouTube，请到「设置 → 系统配置 → 网络代理」点「测试」检查代理'
+    : '连不上 YouTube。部署在大陆的，请到「设置 → 系统配置 → 网络代理」填代理地址'
+}
+
+const NETWORK_ERROR = /timed? ?out|Connection (?:refused|reset|aborted)|Network is unreachable|No route to host|getaddrinfo|Name or service not known|Temporary failure in name resolution|nodename nor servname|Tunnel connection failed|ProxyError|Failed to establish|Remote end closed|RemoteDisconnected|EOF occurred|SSLError|SSL: |Unable to connect|Errno (?:101|104|110|111|113)/i
+
+/** yt-dlp 的 stderr → 给用户看的原因。返回 Error（Offline/NoStreamsTab 子类型供调用方区分）。 */
+export function ytDlpError(stderr = '', { killed = false, code } = {}) {
+  if (code === 'ENOENT') return new Error('缺少 yt-dlp，请运行 npm run setup:youtube 或配置 YTDLP_BIN')
+  if (/does not have a streams tab/i.test(stderr)) return new NoStreamsTab()
+  if (/not currently live|live event will begin|will begin in|already ended/i.test(stderr)) return new Offline('这场直播尚未开始或已经结束')
+  // 机房 / 机场出口常被要求人机验证，换节点通常就好；和会员专享、地区限制分开说
+  if (/confirm you.?re not a bot/i.test(stderr)) return new Error('YouTube 要求这个出口 IP 做人机验证，请换一个代理节点再试')
+  if (/HTTP Error 429|Too Many Requests/i.test(stderr)) return new Error('YouTube 限制了这个出口 IP 的请求次数，稍后再试或换一个代理节点')
+  if (/sign in|members.only|not available in your country/i.test(stderr)) return new Error('此直播在当前出口无法匿名播放')
+  if (killed || NETWORK_ERROR.test(stderr)) return new Error(unreachableMessage())
+  return new Error('YouTube 解析失败，可能是解析组件过旧：到「源管理 → YouTube 直播」点「检查更新」')
+}
+
+/** undici 的网络失败（不是我们自己抛的 HTTP 状态错误）。 */
+function isNetworkFailure(err) {
+  return err?.name === 'TimeoutError' || err?.name === 'AbortError' || (err instanceof TypeError && /fetch failed/i.test(err.message)) || Boolean(err?.cause?.code)
+}
+
 async function metadata(url, args) {
-  const binary = process.env.YTDLP_BIN || (existsSync(localBinary) ? localBinary : 'yt-dlp')
+  const binary = ytDlpBinary()
   let data
   try {
     const result = await run(binary, ['--ignore-config', '--no-cache-dir', '--skip-download', '--dump-single-json',
       '--socket-timeout', '12', '--retries', '0', '--extractor-retries', '0', '--js-runtimes', 'node:' + process.execPath,
-      '--proxy', systemProxyUrl() || '', ...args, '--', url], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 })
+      '--proxy', ytDlpProxyArg(), ...args, '--', url], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 })
     data = result.stdout
   } catch (err) {
     // yt-dlp 错误可能带回带签名的播放地址，仅输出分类后的原因。
-    if (err.code === 'ENOENT') throw new Error('缺少 yt-dlp，请运行 npm run setup:youtube 或配置 YTDLP_BIN')
-    if (/does not have a streams tab/i.test(err.stderr)) throw new NoStreamsTab()
-    if (/not currently live|live event will begin|will begin in|already ended/i.test(err.stderr)) throw new Offline('这场直播尚未开始或已经结束')
-    if (/sign in|members.only|not available in your country/i.test(err.stderr)) throw new Error('此直播在当前出口无法匿名播放')
-    throw new Error('YouTube 解析失败，请检查 yt-dlp 及部署机器的网络')
+    throw ytDlpError(String(err.stderr || ''), { killed: err.killed, code: err.code })
   }
   try { return JSON.parse(data) } catch { throw new Error('YouTube 解析结果不是有效的频道或场次数据') }
 }
@@ -118,21 +169,23 @@ export function records(config = {}) {
   return rows.map(r => record(r.channelId, r.videoId, r.name))
 }
 
-export function parseVideo(html, id) {
+export function parseVideoChannel(html, id) {
   const data = playerData(html)
   const v = data.videoDetails
-  const live = data.microformat?.playerMicroformatRenderer?.liveBroadcastDetails
-  const status = data.playabilityStatus?.status
-  if (!v || !['OK', 'LIVE_STREAM_OFFLINE'].includes(status)) throw new Error('此条目无法公开访问')
-  if (v.videoId !== id || !v.isLiveContent || live?.endTimestamp || !(v.isLive || live?.isLiveNow || status === 'LIVE_STREAM_OFFLINE')) {
-    throw new Error('请选择正在直播或已预约的场次，普通视频和回放不可添加')
-  }
-  return record(v.channelId, id, v.title)
+  if (!v || v.videoId !== id) throw new Error('无法从此视频识别所属频道，请改用频道主页链接')
+  // A video is only a way to identify its owner. Never save its title/ID as a channel.
+  return record(v.channelId, null, v.author || data.microformat?.playerMicroformatRenderer?.ownerChannelName)
+}
+
+function parseChannel(data, expectedId) {
+  const channel = record(data.channel_id, null, data.channel)
+  if (expectedId && expectedId !== channel.channelId) throw new Error('频道身份与直播列表不符')
+  return channel
 }
 
 export function parseBroadcasts(data, expectedId) {
-  const channel = record(data.channel_id, null, data.channel)
-  if ((expectedId && expectedId !== channel.channelId) || !Array.isArray(data.entries)) throw new Error('频道身份与直播列表不符')
+  const channel = parseChannel(data, expectedId)
+  if (!Array.isArray(data.entries)) throw new Error('频道身份与直播列表不符')
   const events = data.entries.filter(v => videoPattern.test(v?.id) && (!v.channel_id || v.channel_id === channel.channelId) &&
     (!v.availability || ['public','unlisted'].includes(v.availability)) && ['is_live','is_upcoming'].includes(v.live_status))
     .map(v => ({ ...record(channel.channelId, v.id, v.title), status: v.live_status, url: watchUrl(v.id) }))
@@ -148,15 +201,69 @@ async function broadcasts(base, expectedId, read = metadata) {
   }
 }
 
-export async function inspect(raw) {
+export async function inspect(raw, { includeEvents = true, readMetadata = metadata, readWatchPage = watchPage } = {}) {
   const input = normalizeYouTubeInput(raw)
-  if (input.channelUrl) {
-    const id = input.channelUrl.match(/\/channel\/(UC[\w-]{22})$/)?.[1]
-    const { channel, events } = await broadcasts(input.channelUrl, id)
-    return { item: channel, events }
+  const owner = input.videoId ? parseVideoChannel(await readWatchPage(input.videoId), input.videoId) : null
+  const base = owner ? channelUrl(owner.channelId) : input.channelUrl
+  const id = owner?.channelId || base.match(/\/channel\/(UC[\w-]{22})$/)?.[1]
+  if (!includeEvents) {
+    const item = owner || parseChannel(await readMetadata(base, ['--flat-playlist', '--playlist-end', '1']), id)
+    return { item, events: [] }
   }
-  const resp = await proxyAwareFetch(watchUrl(input.videoId), { redirect:'error', signal:AbortSignal.timeout(12000) })
-  return { item: parseVideo(await readText(resp, 6 * 1024 * 1024), input.videoId), events: [] }
+  const { channel, events } = await broadcasts(base, id, readMetadata)
+  return { item: channel, events }
+}
+
+async function watchPage(videoId) {
+  let resp
+  try { resp = await outboundFetch(watchUrl(videoId), { redirect:'error', signal:AbortSignal.timeout(12000) }) }
+  catch (err) { throw isNetworkFailure(err) ? new Error(unreachableMessage()) : err }
+  return readText(resp, 6 * 1024 * 1024)
+}
+
+/**
+ * 固定场次现在的状态：live / upcoming / ended / unavailable，看不出来时 unknown。
+ * 只读页面里的播放器数据，不调 yt-dlp。后台据此标出已经结束、可以移除的场次。
+ */
+export function videoStatus(html, id) {
+  let data
+  try { data = playerData(html) } catch { return 'unknown' }
+  const v = data.videoDetails
+  const live = data.microformat?.playerMicroformatRenderer?.liveBroadcastDetails
+  const status = data.playabilityStatus?.status
+  // 删除 / 设为私享才算失效；LOGIN_REQUIRED 多半是出口 IP 被要求人机验证，不能据此说场次没了
+  const gone = ['ERROR', 'UNPLAYABLE'].includes(status)
+  if (!v || v.videoId !== id) return gone ? 'unavailable' : 'unknown'
+  if (live?.endTimestamp) return 'ended'
+  if (v.isLive || live?.isLiveNow) return 'live'
+  if (v.isUpcoming || status === 'LIVE_STREAM_OFFLINE') return 'upcoming'
+  if (gone) return 'unavailable'
+  return status === 'OK' && v.isLiveContent ? 'ended' : 'unknown'
+}
+
+// 状态缓存 10 分钟：打开源管理页就会查，别每次都把所有固定场次的页面拉一遍
+const statusCache = new Map()
+const STATUS_TTL = 10 * 60 * 1000
+export async function eventStatuses(rows, { concurrency = 3, now = Date.now } = {}) {
+  const ids = [...new Set(rows.map(row => row.videoId).filter(id => videoPattern.test(id || '')))]
+  const out = {}
+  const queue = ids.filter(id => {
+    const hit = statusCache.get(id)
+    if (hit && hit.until > now()) { out[id] = hit.status; return false }
+    return true
+  })
+  async function worker() {
+    for (let id = queue.shift(); id; id = queue.shift()) {
+      let status
+      try { status = videoStatus(await watchPage(id), id) } catch { status = 'unknown' }
+      out[id] = status
+      // 查不出来的不缓存，下次再试
+      if (status !== 'unknown') statusCache.set(id, { status, until: now() + STATUS_TTL })
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
+  if (statusCache.size > 1000) statusCache.clear()
+  return out
 }
 
 export function mediaUrl(raw) {
@@ -192,22 +299,45 @@ export function parseLive(data, item, expectedVideoId) {
 }
 
 const sessions = new Map()
-export const clearResolveCache = () => sessions.clear()
-async function session(item, exactId, force = false) {
-  const key = refOf(item) + ':' + (exactId || '')
+// 关注频道时「现在在播哪一场」：列频道直播页要多跑一次 yt-dlp（约 4 秒），重开同一频道时先试上次那场，
+// 那场已经结束（Offline）再重新列。10 分钟内频道换成别的场次作为第一场时，会晚一点切过去。
+const liveIds = new Map()
+const LIVE_ID_TTL = 10 * 60 * 1000
+export const clearResolveCache = () => { sessions.clear(); liveIds.clear() }
+async function session(item, exactId, rejected) {
+  // 播放地址绑定解析时的出口 IP：换了代理，旧解析结果拿去取分片只会 403
+  const key = refOf(item) + ':' + (exactId || '') + ':' + outboundProxyKey()
   const cached = sessions.get(key)
-  if (cached && (cached.pending || (!force && cached.until > Date.now()))) return cached.promise
+  // Only replace the session that actually failed. A late 403 from another
+  // request must reuse an already refreshed session, not evict it again.
+  if (cached && (cached.pending || ((!rejected || cached.live !== rejected) && cached.until > Date.now()))) return cached.promise
   if (sessions.size >= 512) sessions.delete(sessions.keys().next().value)
   const state = { pending:true, until:0 }
   state.promise = (async () => {
     let videoId = exactId || item.videoId
+    let live
     if (!videoId) {
-      const { events } = await broadcasts(channelUrl(item.channelId), item.channelId)
-      videoId = events.find(event => event.status === 'is_live')?.videoId
-      if (!videoId) throw new Offline('频道暂未开播，订阅已保留，开播后重新打开即可')
+      const hint = liveIds.get(item.channelId)
+      if (hint && hint.until > Date.now()) {
+        try { live = parseLive(await metadata(watchUrl(hint.videoId), ['--no-playlist']), item, hint.videoId) }
+        catch (err) {
+          if (!(err instanceof Offline)) throw err
+          liveIds.delete(item.channelId)
+        }
+      }
+      if (!live) {
+        const { events } = await broadcasts(channelUrl(item.channelId), item.channelId)
+        videoId = events.find(event => event.status === 'is_live')?.videoId
+        if (!videoId) throw new Offline('频道暂未开播，订阅已保留，开播后重新打开即可')
+      }
     }
-    const live = parseLive(await metadata(watchUrl(videoId), ['--no-playlist']), item, videoId)
+    live ||= parseLive(await metadata(watchUrl(videoId), ['--no-playlist']), item, videoId)
+    if (!exactId && !item.videoId) {
+      if (liveIds.size >= 512) liveIds.delete(liveIds.keys().next().value)
+      liveIds.set(item.channelId, { videoId: live.videoId, until: Date.now() + LIVE_ID_TTL })
+    }
     state.until = Math.min(live.expires - 90000, Date.now() + (exactId ? 240000 : 45000))
+    state.live = live
     return live
   })().catch(err => {
     state.until = Date.now() + (err instanceof Offline ? 15000 : 2000)
@@ -268,7 +398,9 @@ export function publicManifest(text, base) {
 }
 
 async function playlist(url, live) {
-  const resp = await fetchUpstreamResponse(url, { upstreamHeaders:live.upstreamHeaders, signal:AbortSignal.timeout(10000) })
+  let resp
+  try { resp = await fetchUpstreamResponse(url, { upstreamHeaders:live.upstreamHeaders, signal:AbortSignal.timeout(10000), fetchImpl:outboundFetch }) }
+  catch (err) { throw isNetworkFailure(err) ? new Error(unreachableMessage()) : err }
   return publicManifest(await readText(resp, 2 * 1024 * 1024), resp.url || url)
 }
 class RemovedSubscription extends Error {}
@@ -285,10 +417,12 @@ export async function resolve(ref, {config}) {
     try { master = await playlist(live.url, live) }
     catch (err) {
       if (!/HTTP (401|403|410)$/.test(err.message)) throw err
-      live = await session(item, undefined, true)
+      live = await session(item, undefined, live)
       master = await playlist(live.url, live)
     }
-    return { url:live.url, manifestUrl:live.url, manifestText:topVariantFirst(master, { highestOnly: true }), proxyHls:true,
+    // 「最高画质」上限：视频全程经服务器和代理转发，限了能省带宽和代理流量；0 = 不限
+    const maxHeight = Number(config?.maxHeight) || 0
+    return { url:live.url, manifestUrl:live.url, manifestText:topVariantFirst(master, { highestOnly: true, maxHeight }), proxyHls:true,
       upstreamHeaders:live.upstreamHeaders, upstreamUrlTransform:mediaUrl }
   } catch (err) {
     const status = err instanceof RemovedSubscription ? 404 : err instanceof Offline ? 503 : 502
@@ -318,7 +452,7 @@ export async function fetchProxyMedia(ref, config, raw, options) {
   mediaUrl(raw)
   const item = configured(ref, config)
   const request = async (url, headers = options.upstreamHeaders) => {
-    const res = await fetchUpstreamResponse(url, { ...options, upstreamHeaders:headers })
+    const res = await fetchUpstreamResponse(url, { ...options, upstreamHeaders:headers, fetchImpl:outboundFetch })
     if (res.ok && options.method !== 'HEAD' && new URL(url).pathname.endsWith('.m3u8')) {
       const text = publicManifest(liveWindow(await readText(res, 16 * 1024 * 1024)), res.url || url)
       return new Response(text, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } })
@@ -333,9 +467,20 @@ export async function fetchProxyMedia(ref, config, raw, options) {
   }
   const videoId = field(raw, 'id')?.split('.')[0]
   if (!videoPattern.test(videoId || '') || (item.videoId && videoId !== item.videoId) || !field(raw, 'itag')) throw new Error('无法更新此直播签名')
-  const live = await session(item, videoId)
-  const master = await playlist(live.url, live)
-  let url = renewedLink(master, live.url, raw)
-  if (field(raw,'sq')) url = renewedLink(await playlist(url, live), url, raw, true)
-  return request(url, live.upstreamHeaders)
+  let live = await session(item, videoId)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const master = await playlist(live.url, live)
+      let url = renewedLink(master, live.url, raw)
+      if (field(raw,'sq')) url = renewedLink(await playlist(url, live), url, raw, true)
+      const res = await request(url, live.upstreamHeaders)
+      if (attempt || ![401,403,410].includes(res.status)) return res
+      await res.body?.cancel()
+    } catch (err) {
+      // A missing track/segment or a changed programme cannot be fixed by
+      // replacing its signature. Only retry explicit authorization failures.
+      if (attempt || !/HTTP (401|403|410)$/.test(err.message)) throw err
+    }
+    live = await session(item, videoId, live)
+  }
 }

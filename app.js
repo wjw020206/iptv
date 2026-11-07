@@ -34,7 +34,7 @@ import { mergeChannelGroups } from './utils/multiLinePlaylist.js';
 import { cosSync } from "./utils/cosSync.js";
 import { getAliasesAPI, setAliasRuleAPI, removeAliasRuleAPI } from "./utils/aliasesAPI.js";
 import { getGroupRulesAPI, setGroupRuleAPI, removeGroupRuleAPI, moveGroupRuleAPI } from "./utils/groupRulesAPI.js";
-import { getSystemConfigAPI, saveSystemConfigAPI } from "./utils/systemConfigAPI.js";
+import { getSystemConfigAPI, saveSystemConfigAPI, testProxyAPI } from "./utils/systemConfigAPI.js";
 import { exportConfigAPI, importConfigAPI } from "./utils/configBackupAPI.js";
 import { readConfig, saveConfig, parseInterfaceTxt, collectGroupConflicts, applyConfig,
          listProfiles, createProfile, renameProfile, deleteProfile } from "./utils/playlistConfig.js";
@@ -454,6 +454,20 @@ async function handleRequest(req, res) {
       return
     }
 
+    // 网络代理测试（系统配置页）：经输入框里的代理连 YouTube / Telegram，连不上是正常结果，不算服务端错误
+    if (routePath === '/api/proxy-test' && method === 'POST') {
+      try {
+        const data = JSON.parse(await readBody(req) || '{}')
+        const result = await testProxyAPI(typeof data.proxy === 'string' ? data.proxy : '')
+        res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json;charset=UTF-8' });
+        res.end(JSON.stringify(result));
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json;charset=UTF-8' });
+        res.end(JSON.stringify({ success: false, message: error.message }));
+      }
+      return
+    }
+
     if (routePath === '/api/core-dumps/clean' && method === 'POST') {
       printBlue("API: 清理崩溃转储")
       res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8' });
@@ -792,6 +806,8 @@ async function handleRequest(req, res) {
           case 'youtubeInspect':
           case 'youtubeAdd':
           case 'youtubeRemove':
+          case 'youtubeStatus':
+          case 'youtubeRuntime':
             result = await youtubeSubscriptionAPI(data)
             break
           case 'toggleModule':
@@ -1528,7 +1544,12 @@ async function handleRequest(req, res) {
       // 熔断窗口内：直接走下方 302 回退，不再替播放器把重试打到上游
       manifestDiag.reason = '熔断窗口内未打上游'
     } else {
-      manifest = await fetchManifestDirect(result.playURL, result.upstreamHeaders, manifestDiag, result.upstreamFamily)
+      const ref = routeUrl.split('?')[0].split('/').filter(Boolean).at(-1).replace(/\.m3u8$/, '')
+      const owner = resolverFor(ref)
+      const fetchMedia = owner?.fetchProxyMedia
+        ? (url, options) => owner.fetchProxyMedia(ref, getModuleConfig(owner.id), url, options)
+        : undefined
+      manifest = await fetchManifestDirect(result.playURL, result.upstreamHeaders, manifestDiag, result.upstreamFamily, fetchMedia)
       markManifestResult(failKey, manifest != null)
     }
     // 全代理：再把清单里的绝对地址换成本机同源相对地址，分片改由 /proxy/s<key>.ts 转发
