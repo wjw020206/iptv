@@ -6,7 +6,7 @@ import { printDebug, printGreen, printGrey, printRed, printYellow } from "./colo
 import { readConfig, parseInterfaceTxt, applyConfig, generateM3u8, generateTxt } from "./playlistConfig.js";
 import { getKeywordGroupRules } from "./groupRulesAPI.js";
 import { hasSourceFallbackGroups } from "./sourceGroupFallback.js";
-import { resolverFor, listModules } from "../extractors/registry.js";
+import { resolverFor, listModules, hasModule } from "../extractors/registry.js";
 import { getExtractorManager, getModuleConfig } from "./extractorManager.js";
 import { omitPlayerOnlyOpts } from "./channelOpts.js";
 import { fetchUpstreamResponse } from "./hlsProxy.js";
@@ -397,7 +397,8 @@ async function channel(url, urlUserId, urlToken, client, request = {}) {
     // 另带客户端身份和 selfBase（这位客户端访问本实例用的地址前缀，仅清单直出时有）：
     // 模块要按播放器下发不同清单、或在清单里引用本机地址时用，用不上的模块不必理会。
     // query 是播放地址「?」后的参数，模块可据此按频道覆盖配置（如 ?quality= 画质，issue #185）。
-    const config = getExtractorManager().effectiveConfig(module)
+    // 挂上来的非模块解析者（自定义源经代理转发）没有模块配置；effectiveConfig 会给它在模块缓存里建条目
+    const config = hasModule(module.id) ? getExtractorManager().effectiveConfig(module) : {}
     resolved = await module.resolve(pid, {
       account: { userId: urlUserId, token: urlToken },
       config,
@@ -446,6 +447,9 @@ async function channel(url, urlUserId, urlToken, client, request = {}) {
   // 平台可要求旧的无后缀入口也直出动态 HLS 清单；用于兼容已收藏/已下发的旧地址。
   result.relayHls = resolved.relayHls === true
   result.proxyHls = resolved.proxyHls === true
+  // 自定义源「经网络代理转发」交回原地址（'no-proxy' 没有生效代理 / 'not-hls' 不是 HLS）：app.js 直接 302
+  result.directRedirect = resolved.directRedirect === 'no-proxy' || resolved.directRedirect === 'not-hls'
+    ? resolved.directRedirect : ''
   result.upstreamFamily = resolved.upstreamFamily === 4 || resolved.upstreamFamily === 6 ? resolved.upstreamFamily : undefined
   result.streamType = resolved.streamType || module.streamType || 'hls'
   result.validateMediaUrl = resolved.validateMediaUrl

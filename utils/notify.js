@@ -613,7 +613,7 @@ async function sendEmail(channel, message, createTransport) {
   }
 }
 
-// Telegram 在大陆连不上，走后台「系统配置 → 网络代理」（没填则沿用 HTTPS_PROXY）；
+// Telegram 在大陆连不上，走后台「设置 → 网络代理」（没填则沿用 HTTPS_PROXY）；
 // 飞书、企业微信、钉钉在国内，Bark / Webhook / 自定义接口照旧按 HTTPS_PROXY，不受这个设置影响
 function defaultFetchFor(channel) {
   return channel.type === 'telegram' ? outboundFetch : proxyAwareFetch

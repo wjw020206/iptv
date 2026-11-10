@@ -18,7 +18,8 @@
  *   description           string  后台一句话说明
  *   category              string  可选；后台源管理分组。'account' 表示带账号/
  *                                 授权能力，'live' 表示网络直播平台，'overseas' 表示
- *                                 面向大陆以外、默认关闭的海外模块；不声明即
+ *                                 面向大陆以外、默认关闭的海外模块（海外频道、澳门、
+ *                                 YouTube 直播）；不声明即
  *                                 'standard'（免账号的普通官方抓取模块）
  *   defaultEnabled        boolean 可选；用户没在卡片上点过开关时开不开，不声明即开。
  *                                 只有面向海外、在大陆连不上或常卡顿的模块写 false
@@ -46,7 +47,17 @@
  *                                 是省级地区（REGION_NAMES）就用它；分组名不是地区（上海景观）、
  *                                 按地市拆组（山东市县）的显式声明。不是地区的专题面板（国际、
  *                                 直播中国、iPanda）也用它，排在各省面板前面
+ *   county                boolean 可选；true 表示市县台模块（山东市县、各省「市县台·X」）。卡片照旧在本省
+ *                                 面板里，后台「批量开关」把它们单独收成「市县台」一节，一次全开全关。
+ *                                 只是归节，不是另一层开关。声明了就必须 defaultEnabled: false、region 是省级
+ *                                 地区、不带 category；反过来，默认关、归省面板的免账号模块也必须声明
+ *                                 （scripts/test-extractors.mjs 两头都查）
  *   preserveGroupSuffixes array   可选；命中这些后缀的特殊分组不被 outputGroupName 覆盖
+ *   splitFrom             object  可选；{ id, groups }。这张卡是从模块 id 里拆出来的，原来由它输出 groups
+ *                                 这几个分组（2026-11-08 景观从吉林、河北、南京、上海、北京拆出）。管理器据此
+ *                                 做一次性搬家：原模块缓存里的这几组挪过来；原模块被关掉的，新卡也关；
+ *                                 配置档按源停用了原模块的，也停用新卡（见 extractorManager #migrateSplitModules）。
+ *                                 分组名和播放引用都不改，用户对这些频道做过的隐藏、改名、排序照旧生效
  *   channelHlsMode        string  可选；'proxy' 或 'relay'，在输出时覆盖频道缓存中的
  *                                 HLS 路由标记，适合整个平台统一要求代理的模块
  *   channelHlsModeForConfig(config) 可选；按当前生效配置返回 'proxy'/'relay'，覆盖上面的固定模式
@@ -57,11 +68,26 @@
  *                                 刷新预览图 / 检测可用性 / 失败自动换台）时本地拒绝、不打上游。
  *                                 给「服务端代所有观众向官方取票」且官方按 IP 限频的模块用；
  *                                 直链或分片播放器直连的模块不需要
+ *   outbound              string  可选；'proxy' 表示模块的全部出站——取址、节目单、清单、分片、外部工具——
+ *                                 都走后台「设置 → 网络代理」（utils/outboundProxy.js 的 outboundFetch，
+ *                                 没配时沿用环境变量代理或直连）。后台「网络代理」的适用名单、「测试」
+ *                                 按钮的目标、模块卡片上的「走代理」角标都从这个声明派生，不另外维护；
+ *                                 scripts/test-extractors.mjs 静态检查：声明了的模块不许再用 proxyAwareFetch
+ *                                 或全局 fetch，没声明的不许引用 outboundFetch。新增要走代理的模块按
+ *                                 ADD-CHANNELS.md「要走代理的模块」那条做
+ *   proxyProbe            object  outbound 为 'proxy' 时必需：{ url, name? }。「测试」按钮用来代表这个模块的
+ *                                 一个 https 接口或清单（取址用的接口、或一路直播的主清单）；name 不写用模块名
+ *   proxyHosts            array   outbound 为 'proxy' 时必需：模块出站真会连、大陆直连不通的域名，按后缀写
+ *                                 （'tdm.com.mo'、'googlevideo.com'，不带协议、路径或通配符），要盖住 proxyProbe.url
+ *                                 的主机。代理软件用规则模式时得放行这些域名才会走节点；后台「网络代理」的
+ *                                 说明和「测试」里断在代理之后的失败项按它告诉用户往代理规则里加什么
  *   streamType            string  可选；默认 hls，flv 由本机流式代理且不转码。
  *                                 FLV resolve 须返回 validateMediaUrl 校验官方调度跳转。
  *   capabilities.catchup boolean 可选；false 表示纯直播，不透传回看查询参数。
  *   configSchema          array   字段描述，后台据此渲染表单、后端据此校验。值会进请求头的
- *                                 文本字段声明 headerValue: true，保存时去首尾空白、拦下非法字符
+ *                                 文本字段声明 headerValue: true，保存时去首尾空白、拦下非法字符。
+ *                                 字段说明 hint 写一句话的字符串；三条以上要点写成字符串数组，
+ *                                 后台按编号列表显示
  *   credentialCheck       object  要登录的模块（有 secret 字段或 browserLoginFlow）必需：
  *                                 { refresh: 刷新时检查凭证并报 meta.credentialRejected,
  *                                   playback: 播放时发现并经 credentialRejected(config) 上报,
@@ -71,6 +97,7 @@
  *                                 见 ADD-CHANNELS.md「登录凭证」，测试在 test-extractors.mjs
  *
  *   async fetch(config, ctx) → { groups: [{ name, dataList }], meta }
+ *       ctx.isEnabled() 可供分批后台维护检查当前开关；关闭后停止后续出站，不发布在飞结果。
  *       必需。返回**分组树**而不是扁平频道数组——channelMerger 的合并算法是
  *       「按 group.name 找同名分组再 push dataList」，扁平数组等于把
  *       groupTitle→分组 的映射重新发明一遍。
@@ -175,8 +202,11 @@ import bilibiliLive from './bilibili-live/index.js'
 import douyinLive from './douyin-live/index.js'
 import youtubeLive from './youtube-live/index.js'
 import asianLive from './asian-live/index.js'
+import redbull from './redbull/index.js'
+import xumo from './xumo/index.js'
 import anhui from './anhui/index.js'
 import beijing from './beijing/index.js'
+import beijingScenic from './beijing/scenic.js'
 import chongqing from './chongqing/index.js'
 import sichuan from './sichuan/index.js'
 import chengdu from './chengdu/index.js'
@@ -198,6 +228,7 @@ import gzstv from './gzstv/index.js'
 import gxtv from './gxtv/index.js'
 import qingdao from './qingdao/index.js'
 import hebtv from './hebtv/index.js'
+import hebtvScenic from './hebtv/scenic.js'
 import heilongjiang from './heilongjiang/index.js'
 import hbtv from './hbtv/index.js'
 import hkstv from './hkstv/index.js'
@@ -206,6 +237,7 @@ import hntv from './hntv/index.js'
 import huyaLive from './huya-live/index.js'
 import ipanda from './ipanda/index.js'
 import jlntv from './jlntv/index.js'
+import jlntvScenic from './jlntv/scenic.js'
 import jxntv from './jxntv/index.js'
 import jstv from './jstv/index.js'
 import jiaxing from './jiaxing/index.js'
@@ -214,6 +246,7 @@ import shaoxing from './shaoxing/index.js'
 import zhejiangLocal from './zhejiang-local/index.js'
 import iqilu from './iqilu/index.js'
 import kankanews from './kankanews/index.js'
+import kankanewsScenic from './kankanews/scenic.js'
 import livechina from './livechina/index.js'
 import lotustv from './lotustv/index.js'
 import meizhouHakka from './meizhou-hakka/index.js'
@@ -223,6 +256,7 @@ import ningbo from './ningbo/index.js'
 import ningde from './ningde/index.js'
 import ningxia from './ningxia/index.js'
 import njtv from './njtv/index.js'
+import njtvScenic from './njtv/scenic.js'
 import nmtv from './nmtv/index.js'
 import putian from './putian/index.js'
 import qtv from './qtv/index.js'
@@ -250,6 +284,8 @@ import overseas from './overseas/index.js'
 // 模块 id 会进 sourceId 并写进 EXTINF 属性值，不消毒就是注入面。
 // 与 utils/configBackupAPI.js 的文件名白名单同款约束。
 export const MODULE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
+// proxyHosts 的每一项：小写域名后缀，至少两段，不带协议、端口、路径、通配符
+const PROXY_HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/
 export const MODULE_CATEGORIES = new Set(['account', 'live', 'standard', 'overseas'])
 
 const MODULES = [
@@ -269,6 +305,7 @@ const MODULES = [
   websports,
   anhui,
   beijing,
+  beijingScenic,
   chongqing,
   sichuan,
   chengdu,
@@ -288,8 +325,10 @@ const MODULES = [
   putian,
   ningde,
   jlntv,
+  jlntvScenic,
   jxntv,
   hebtv,
+  hebtvScenic,
   hbtv,
   heilongjiang,
   hnntv,
@@ -311,6 +350,7 @@ const MODULES = [
   meizhouHakka,
   // 江门官方直播 CDN 持续 502，2026-10-27 暂时取消注册；解析模块保留供恢复。
   njtv,
+  njtvScenic,
   nmtv,
   shanxi,
   shaanxi,
@@ -323,6 +363,7 @@ const MODULES = [
   qingdao,
   qtv,
   kankanews,
+  kankanewsScenic,
   songjiang,
   livechina,
   ipanda,
@@ -332,6 +373,8 @@ const MODULES = [
   // 市县台（广电云，按省拆成 20 个模块）跟在各省级、地市模块之后：并进同省分组时排在省台、市台后面
   ...guangdianyunModules,
   // 海外频道排最后：并进体育、文旅等现有分组时，跟在各台官方频道后面
+  redbull,
+  xumo,
   overseas,
 ]
 
@@ -357,6 +400,19 @@ export function validateModule(module) {
   }
   if (module.category != null && !MODULE_CATEGORIES.has(module.category)) {
     throw new Error(`抓取模块 ${module.id} 的 category 非法: ${JSON.stringify(module.category)}`)
+  }
+  if (module.county != null && typeof module.county !== 'boolean') {
+    throw new Error(`抓取模块 ${module.id} 的 county 必须是布尔值`)
+  }
+  if (module.county && (module.defaultEnabled !== false || module.category != null)) {
+    throw new Error(`抓取模块 ${module.id} 声明了 county（市县台），必须 defaultEnabled: false 且不带 category`)
+  }
+  if (module.splitFrom != null) {
+    const { id, groups } = module.splitFrom
+    if (!MODULE_ID_RE.test(id || '') || id === module.id
+      || !Array.isArray(groups) || !groups.length || groups.some(name => typeof name !== 'string' || !name.trim())) {
+      throw new Error(`抓取模块 ${module.id} 的 splitFrom 要写成 { id: '原模块 id', groups: ['原来由它输出的分组名'] }`)
+    }
   }
   if (module.catalogVersion != null
     && (!Number.isInteger(module.catalogVersion) || module.catalogVersion < 1)) {
@@ -394,6 +450,28 @@ export function validateModule(module) {
   if (module.streamType != null && !['hls', 'flv'].includes(module.streamType)) {
     throw new Error(`抓取模块 ${module.id} 的 streamType 非法`)
   }
+  if (module.outbound != null && module.outbound !== 'proxy') {
+    throw new Error(`抓取模块 ${module.id} 的 outbound 非法: ${JSON.stringify(module.outbound)}（只有 'proxy'）`)
+  }
+  if (module.outbound === 'proxy') {
+    const probe = module.proxyProbe
+    if (!probe || typeof probe !== 'object' || !/^https?:\/\/\S+$/.test(probe.url || '')) {
+      throw new Error(`抓取模块 ${module.id} 声明了 outbound: 'proxy'，必须给 proxyProbe: { url, name? }（测试按钮用的代表性接口）`)
+    }
+    if (probe.name != null && (typeof probe.name !== 'string' || !probe.name.trim())) {
+      throw new Error(`抓取模块 ${module.id} 的 proxyProbe.name 必须是非空字符串`)
+    }
+    const hosts = module.proxyHosts
+    if (!Array.isArray(hosts) || !hosts.length || hosts.some(host => typeof host !== 'string' || !PROXY_HOST_RE.test(host))) {
+      throw new Error(`抓取模块 ${module.id} 声明了 outbound: 'proxy'，必须给 proxyHosts: ['域名后缀', …]（只写小写域名，如 'tdm.com.mo'，不带协议、路径或通配符）`)
+    }
+    const probeHost = new URL(probe.url).hostname
+    if (!hosts.some(host => probeHost === host || probeHost.endsWith('.' + host))) {
+      throw new Error(`抓取模块 ${module.id} 的 proxyProbe.url 主机 ${probeHost} 不在 proxyHosts 里：测试目标得是模块真会连的域名`)
+    }
+  } else if (module.proxyProbe != null || module.proxyHosts != null) {
+    throw new Error(`抓取模块 ${module.id} 没声明 outbound: 'proxy'，不该有 proxyProbe / proxyHosts`)
+  }
 }
 
 const registry = new Map()
@@ -403,6 +481,11 @@ for (const module of MODULES) {
     throw new Error(`抓取模块 id 重复: ${module.id}`)
   }
   registry.set(module.id, module)
+}
+for (const module of registry.values()) {
+  if (module.splitFrom && !registry.has(module.splitFrom.id)) {
+    throw new Error(`抓取模块 ${module.id} 的 splitFrom 指向不存在的模块 ${module.splitFrom.id}`)
+  }
 }
 
 // 后台按地区收面板用的地区名：省、自治区、直辖市和港澳台
@@ -427,6 +510,11 @@ export function listModules() {
   return [...registry.values()]
 }
 
+/** 走后台「网络代理」的模块（outbound: 'proxy'），按注册顺序：后台名单、测试目标、要放行的域名和角标都从这里拿。 */
+export function proxyModules() {
+  return listModules().filter(module => module.outbound === 'proxy')
+}
+
 /** 按 id 取模块；不存在返回 undefined（调用方自己决定是报错还是跳过）。 */
 export function getModule(id) {
   return registry.get(String(id || ''))
@@ -436,6 +524,13 @@ export function getModule(id) {
 export function hasModule(id) {
   return registry.has(String(id || ''))
 }
+
+/**
+ * 不是抓取模块、但也要认领播放引用的解析者：目前只有自定义源「经网络代理转发」
+ * （utils/customSourceProxy.js，由 app.js 挂上）。它不进注册表——后台没有它的卡片，
+ * 也不在 proxyModules 名单里。模块总是先认领，挂上来的只接模块都不认的引用。
+ */
+const extraResolvers = []
 
 /**
  * 找出该 ref 归哪个模块解析（播放请求到达时用）。
@@ -451,7 +546,17 @@ export function resolverFor(ref) {
   for (const module of registry.values()) {
     if (typeof module.claimsRef === 'function' && module.claimsRef(ref)) return module
   }
+  for (const resolver of extraResolvers) {
+    if (resolver.claimsRef(ref)) return resolver
+  }
   return null
+}
+
+export function registerRefResolver(resolver) {
+  if (!resolver || typeof resolver.claimsRef !== 'function' || typeof resolver.resolve !== 'function') {
+    throw new Error('registerRefResolver 需要 claimsRef 与 resolve')
+  }
+  if (!extraResolvers.includes(resolver)) extraResolvers.push(resolver)
 }
 
 /** 找出哪个模块认领本机媒体路径；只做路由，不在注册表里放平台正则。 */

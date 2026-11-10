@@ -903,6 +903,13 @@
             border-color: #ffadd2;
         }
 
+        /* 走后台「网络代理」的模块（registry.js 的 outbound: 'proxy'），跟分类角标并排 */
+        .source-badge.proxy {
+            background: #e6f4ff;
+            color: #0958d9;
+            border-color: #91caff;
+        }
+
         /* 自定义源的展开详情区。280px 那一栏是使用说明。 */
         .external-detail-wrap {
             display: grid;
@@ -3330,6 +3337,13 @@
         .sys-proxy-result:empty { display: none; }
         .sys-proxy-result .ok { color: var(--ui-success); }
         .sys-proxy-result .fail { color: var(--ui-danger); }
+        /* 分条说明：三条以上要点写成编号列表，放在原有的说明容器里，字号颜色沿用容器 */
+        .hint-list { margin: 0; padding-left: 1.6em; }
+        .hint-list li + li { margin-top: 2px; }
+        .sys-proxy-hosts summary { cursor: pointer; }
+        .sys-proxy-hosts[hidden] { display: none; }
+        /* 不用 user-select: all：一整行域名在同一个 code 里，拖选会被吸到整段的头尾、选区来回跳，没法只选几个 */
+        .sys-proxy-hosts code, .sys-proxy-result code { overflow-wrap: anywhere; }
         .sys-section .system-config-item { padding: 0; border: 0; background: transparent; box-shadow: none; }
         .sys-section .system-config-item label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .sys-section .system-config-item label.sys-check-label { font-weight: 500; cursor: pointer; }
@@ -4104,7 +4118,11 @@
         <div class="modal-content" style="width: 560px; max-width: 92%;">
             <h3>缺台标的频道 <span style="font-size:13px;font-weight:normal;color:#888;">共 <span id="missingLogoCount">0</span> 个</span></h3>
             <p style="color:#666;font-size:13px;margin-bottom:4px;">这些台的源没带台标，或带的已失效，订阅里留了空、播放器会画自己的占位图。想补的话：</p>
-            <p style="color:#999;font-size:12px;margin-bottom:12px;">① 点「补台标」进频道详情上传；② 直接把 <code>&lt;频道名&gt;.png</code> 放进数据目录的 <code>logos/</code>；③ 想整批按名兜底，自己设 <code>mexternalLogoBase</code> 接一个公共台标库（默认不配，见 README）。景观 / 慢直播这类本来就不是台名的，留空即可。</p>
+            <div style="color:#999;font-size:12px;line-height:1.7;margin-bottom:12px;"><ol class="hint-list">
+                <li>点「补台标」进频道详情上传。</li>
+                <li>直接把 <code>&lt;频道名&gt;.png</code> 放进数据目录的 <code>logos/</code>。</li>
+                <li>想整批按名兜底，自己设 <code>mexternalLogoBase</code> 接一个公共台标库（默认不配，见 README）。</li>
+            </ol>景观 / 慢直播这类本来就不是台名的，留空即可。</div>
             <div id="missingLogoList" style="max-height:380px;overflow-y:auto;"></div>
             <div class="modal-actions" style="margin-top:16px;">
                 <button class="btn" onclick="closeMissingLogoModal()">关闭</button>
@@ -4581,7 +4599,7 @@
                                 <strong style="color: #52c41a;">自定义源配置</strong>
                                 <ol style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #666; line-height: 1.8;">
                                     <li>点击"添加自定义源"选择模式：<strong>直连模式</strong>、<strong>抓取模式</strong>或<strong>订阅模式</strong></li>
-                                    <li>想加回港澳台等网络第三方频道：点「添加「来源于网络」列表」，再点"导入并保存"</li>
+                                    <li>想加回港澳台等网络第三方频道：点「添加「网络分享」列表」，再点"导入并保存"</li>
                                     <li><strong>抓取模式</strong>：填写频道名、分组和网页地址，点击"抓取并保存"</li>
                                     <li><strong>直连模式</strong>：填写频道名、分组和m3u8链接，点击"保存"</li>
                                     <li>可编辑、删除、启用/禁用</li>
@@ -4647,7 +4665,9 @@
                                  （随程序自带、由维护者策展，不给用户改名/换序/删除），用户需要的
                                  只有「要不要它」。所以这个开关必须真的管用 —— 打开时会把它播种
                                  回来，见 extractorsAPI.setContentFlagAPI 里的 reseed 分支。 -->
-                            <div class="source-card-desc">自带的 精选频道（央视 / 港澳台 / 地方 / 国际），约 150 个频道。随程序更新，不可编辑。</div>
+                            <!-- 频道数不写死：精选列表从仓库定时拉取、改了不用发版，写死的数字迟早对不上
+                                 （曾写「约 150」，11-09 实际只剩 20）。由 renderBuiltInSubscriptionCount 按已解析的数量填。 -->
+                            <div class="source-card-desc">自带的精选频道（地方台 / 卫视 / 港台 / 国际等）<span id="cfBuiltInSubscriptionsCount"></span>。定时从仓库更新，不可编辑。</div>
                             <div class="source-card-foot">
                                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
                                     <input type="checkbox" id="cfBuiltInSubscriptions" onchange="setContentFlag('enableBuiltInSubscriptions', this.checked)">
@@ -4671,7 +4691,8 @@
                     <button class="mode-switch-btn" onclick="switchSettingsTab(4)">用户管理</button>
                     <button class="mode-switch-btn" onclick="switchSettingsTab(5)">消息推送</button>
                     <button class="mode-switch-btn" onclick="switchSettingsTab(6)">备份迁移</button>
-                    <button class="mode-switch-btn" onclick="switchSettingsTab(7)">COS 订阅</button>
+                    <button class="mode-switch-btn" onclick="switchSettingsTab(7)">网络代理</button>
+                    <button class="mode-switch-btn" onclick="switchSettingsTab(8)">COS 订阅</button>
                 </div>
 
                 <div class="settings-subpanel active" id="settingsSub0">
@@ -4723,25 +4744,11 @@
                                 <input type="checkbox" id="sysEnableDisplayNameUnify" onchange="setSaveDirty('sysconfig')">
                                 统一频道显示名（合并不同源的同台命名）
                             </label>
-                            <div class="system-config-hint">开启后，把不同订阅源里同一个台的不同写法（如 <code>CCTV1</code> / <code>CCTV-1</code> / <code>CCTV1综合</code>）<strong>按内置规则自动统一成同一个显示名</strong>（CCTV 系列、清晰度后缀等已内置）。默认关；手动重命名优先级更高；规则兜不住的写法可在「频道别名」标签里加规则。</div>
-                        </div>
-                    </div>
-                </section>
-                <section class="sys-section">
-                    <div class="sys-section-head">
-                        <div class="sys-section-title">网络代理</div>
-                        <div class="sys-section-desc">适用于 YouTube 直播、澳门（澳广视）、海外频道和 Telegram 消息推送。澳门与海外频道有生效代理时，清单和视频分片均经服务器转发，会使用服务器带宽及代理流量；其他模块不使用这里填写的代理。</div>
-                    </div>
-                    <div class="system-config-grid">
-                        <div class="system-config-item sys-span-all">
-                            <label for="sysProxy">代理地址</label>
-                            <div class="sys-proxy-row">
-                                <input type="text" id="sysProxy" oninput="setSaveDirty('sysconfig'); invalidateProxyTest()" placeholder="http://192.168.1.10:7890" autocomplete="off" spellcheck="false">
-                                <button type="button" class="btn" id="sysProxyTestBtn" onclick="testProxy()">测试</button>
-                            </div>
-                            <div class="system-config-hint">填 Clash、mihomo、OpenClash 等代理软件的 HTTP、SOCKS5 或混合端口，如 <code>http://192.168.1.10:7890</code>、<code>socks5://192.168.1.10:7891</code>；有账号密码的写成 <code>http://用户名:密码@192.168.1.10:7890</code>。账号或密码中的 <code>%</code>、<code>@</code>、<code>#</code> 分别写成 <code>%25</code>、<code>%40</code>、<code>%23</code>。代理软件要打开「允许局域网连接」；Docker 用桥接网络时 <code>127.0.0.1</code> 指容器自己，要填代理所在机器的局域网 IP。播放设备不用设代理。点「测试」不用先保存，测试后仍需保存才生效。测试检查代表性接口与清单，不代表全部频道均可播放。</div>
-                            <div class="system-config-hint sys-env-hint" id="sysProxyEnvHint" hidden>检测到环境变量或系统代理：这里留空时沿用它，填写后以这里为准。</div>
-                            <div class="sys-proxy-result" id="sysProxyResult" aria-live="polite"></div>
+                            <div class="system-config-hint">开启后，把不同订阅源里同一个台的不同写法（如 <code>CCTV1</code> / <code>CCTV-1</code> / <code>CCTV1综合</code>）<strong>按内置规则自动统一成同一个显示名</strong>（CCTV 系列、清晰度后缀等已内置）。<ol class="hint-list">
+                                <li>默认关。</li>
+                                <li>手动重命名优先级更高。</li>
+                                <li>规则兜不住的写法，到「频道别名」标签里加规则。</li>
+                            </ol></div>
                         </div>
                     </div>
                 </section>
@@ -4770,7 +4777,12 @@
                 <div class="settings-editor-card" style="margin-top: 4px;">
                     <div>
                         <div style="font-size:16px; font-weight:600; color:#333;">关键字自动分组</div>
-                        <div class="system-config-hint">自定义订阅源里没写分组的频道会落到「未分组」，每次刷新又回到未分组。这里按<strong>频道名关键字</strong>配规则，名字含关键字的<strong>未分组</strong>频道会自动归到对应分组（多条规则按从上到下、首条命中生效）——刷新也不丢，且<strong>不影响源已分好的分组、手动移动优先</strong>。如 分组 <code>央视</code> ← 关键字 <code>CCTV, 央视</code>。保存后下次刷新播放列表即生效。</div>
+                        <div class="system-config-hint">自定义订阅源里没写分组的频道会落到「未分组」，每次刷新又回到未分组。这里按<strong>频道名关键字</strong>配规则：<ol class="hint-list">
+                        <li>名字含关键字的<strong>未分组</strong>频道自动归到对应分组，如 分组 <code>央视</code> ← 关键字 <code>CCTV, 央视</code>。</li>
+                        <li>多条规则从上到下，首条命中生效。</li>
+                        <li>刷新也不丢；<strong>不影响源已分好的分组，手动移动优先</strong>。</li>
+                        <li>保存后下次刷新播放列表即生效。</li>
+                    </ol></div>
                     </div>
                     <div style="margin-top:12px;">
                         <button type="button" class="btn btn-success" onclick="openGroupRuleModal()">＋ 添加规则</button>
@@ -4784,7 +4796,11 @@
                     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
                         <div>
                             <div style="font-size:16px; font-weight:600; color:#333;">EPG 节目单源（聚合）</div>
-                            <div class="system-config-hint">把外部 XMLTV 源的节目单归一后合并进 <code>/playback.xml</code>，给咪咕和各模块官方节目单都没覆盖的频道补节目单。默认已开启，但不带内置外部源，需要更广覆盖时点「＋ 添加 EPG 源」自己加。勾了「优先于官方节目单」的源，对它当前有节目的频道会覆盖咪咕和各模块的官方节目单（源停更只剩旧数据时自动让回官方）。改动即时保存、无需重启，下次更新生效（或点「立即刷新」）。</div>
+                            <div class="system-config-hint">把外部 XMLTV 源的节目单归一后合并进 <code>/playback.xml</code>，给咪咕和各模块官方节目单都没覆盖的频道补节目单。<ol class="hint-list">
+                        <li>默认已开启，但不带内置外部源；需要更广覆盖时点「＋ 添加 EPG 源」自己加。</li>
+                        <li>勾了「优先于官方节目单」的源，对它当前有节目的频道会覆盖咪咕和各模块的官方节目单；源停更只剩旧数据时自动让回官方。</li>
+                        <li>改动即时保存、无需重启，下次更新生效（或点「立即刷新」）。</li>
+                    </ol></div>
                         </div>
                         <label style="display:flex; align-items:center; gap:6px; white-space:nowrap;">
                             <input type="checkbox" id="epgEnabled" onchange="setEpgEnabled(this.checked)">
@@ -4844,7 +4860,7 @@
                     <div class="user-guide-card" style="margin-top:10px; padding:12px 14px; background:#f7f9fc; border:1px solid #eef1f6; border-radius:6px; font-size:13px; color:#555; line-height:1.7;">
                         <div>• 模块抓取失败、官方服务故障<strong>不推送</strong>（你处理不了，会自动重试），只在后台提醒里显示；其他提醒出现即发，恢复时再发一条「已恢复」；</div>
                         <div>• 升级前就已存在的提醒不发；同一个问题没恢复前只发一次；</div>
-                        <div>• Telegram 的接口在大陆连不上：部署在大陆的到 <a href="javascript:void(0)" onclick="switchSettingsTab(0)">系统配置 → 网络代理</a> 填代理地址，或在「API 地址」填自己的反代；</div>
+                        <div>• Telegram 的接口在大陆连不上：部署在大陆的到 <a href="javascript:void(0)" onclick="switchSettingsTab(7)">网络代理</a> 填代理地址，或在「API 地址」填自己的反代；</div>
                         <div>• 企业微信应用：成员在企业微信里收到，关注了企业「微信插件」的在微信里也能收到；2022 年 6 月以后新建的应用要把服务器公网 IP 加进应用的「企业可信IP」，否则发送失败（60020），IP 不固定的在「API 地址」填一台固定 IP 服务器上转发 <code>qyapi.weixin.qq.com</code> 的反代；</div>
                         <div>• 自定义接口：PushPlus、Server酱、WxPusher、ntfy、Gotify 这类发一个 HTTP 请求就能推送的平台都能接；选「自定义接口」后点「按示例填」，再填上密钥，别的平台照它的接口文档改地址和请求体模板；</div>
                         <div>• 机器人地址和 Token 存在数据目录 <code>notify-channels.json</code>，会随「备份迁移」里的配置导出一起导出，别把备份发给别人。</div>
@@ -4858,7 +4874,11 @@
                 <!-- 配置备份 / 迁移（issue #99） -->
                 <div class="settings-backup settings-editor-card" style="margin-top: 4px;">
                     <div style="font-size:16px; font-weight:600; color:#333;">配置备份 / 迁移</div>
-                    <div class="system-config-hint">一键把全部配置（系统配置、外部源、我的频道与各配置档、EPG 源、别名 / 分组规则、用户令牌、消息推送）导出为单个备份文件；换机 / 重装后导入即可恢复。<strong>⚠️ 导出文件包含咪咕账号、访问密码与推送机器人地址，请勿随意发给他人</strong>；自定义台标 <code>logos/</code> 文件夹不在包内，如有请单独拷贝。</div>
+                    <div class="system-config-hint">一键把全部配置导出为单个备份文件，换机 / 重装后导入即可恢复。<ol class="hint-list">
+                        <li>包含系统配置、外部源、我的频道与各配置档、EPG 源、别名 / 分组规则、用户令牌、消息推送。</li>
+                        <li><strong>⚠️ 导出文件包含咪咕账号、访问密码与推送机器人地址，请勿随意发给他人。</strong></li>
+                        <li>自定义台标 <code>logos/</code> 文件夹不在包内，如有请单独拷贝。</li>
+                    </ol></div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
                         <button class="btn btn-primary" onclick="exportConfigBackup()">导出配置</button>
                         <input type="file" id="configImportFile" accept=".json,application/json" style="max-width: 260px;">
@@ -4875,6 +4895,37 @@
                 </div>
                 </div>
                 <div class="settings-subpanel" id="settingsSub7">
+                <section class="sys-section">
+                    <div class="sys-section-head">
+                        <div class="sys-section-title">网络代理</div>
+                        <div class="sys-section-desc">适用于 <span id="sysProxyScope">YouTube 直播、澳门、海外频道</span>和 Telegram 消息推送（这些模块的卡片上标有「走代理」）。有生效代理时，这些模块的取址、清单和视频分片均经服务器转发，会使用服务器带宽及代理流量；其他模块不使用这里填写的代理。自己添加的订阅源、直连源要走代理，在「自定义源」里该源的卡片上勾「经网络代理转发」。</div>
+                    </div>
+                    <div class="system-config-grid">
+                        <div class="system-config-item sys-span-all">
+                            <label for="sysProxy">代理地址</label>
+                            <div class="sys-proxy-row">
+                                <input type="text" id="sysProxy" oninput="setSaveDirty('proxy'); invalidateProxyTest()" placeholder="http://192.168.1.10:7890" autocomplete="off" spellcheck="false">
+                                <button type="button" class="btn" id="sysProxyTestBtn" onclick="testProxy()">测试</button>
+                            </div>
+                            <div class="system-config-hint"><ol class="hint-list">
+                                <li>填代理软件（Clash、mihomo、OpenClash 等）的 HTTP、SOCKS5 或混合端口，如 <code>http://192.168.1.10:7890</code>、<code>socks5://192.168.1.10:7891</code>。</li>
+                                <li>有账号密码的写成 <code>http://用户名:密码@192.168.1.10:7890</code>；账号密码里的 <code>%</code> <code>@</code> <code>#</code> 要写成 <code>%25</code> <code>%40</code> <code>%23</code>。</li>
+                                <li>代理软件要打开「允许局域网连接」。Docker 用桥接网络时不要填 <code>127.0.0.1</code>（那是容器自己），要填代理所在机器的局域网 IP。</li>
+                                <li>只有服务器走代理，播放设备不用设。</li>
+                                <li>点「测试」不用先保存，测完要点「保存代理设置」才生效；测试只查几个代表性接口，不代表所有频道都能播。</li>
+                            </ol></div>
+                            <details class="system-config-hint sys-proxy-hosts" id="sysProxyHostsBox" hidden><summary>代理软件用规则模式的，要放行这些域名</summary><div id="sysProxyHosts"></div></details>
+                            <div class="system-config-hint sys-env-hint" id="sysProxyEnvHint" hidden>检测到环境变量或系统代理：这里留空时沿用它，填写后以这里为准。</div>
+                            <div class="sys-proxy-result" id="sysProxyResult" aria-live="polite"></div>
+                        </div>
+                    </div>
+                </section>
+                <div class="system-config-hint" style="margin:0 0 10px;">保存即生效，不用重启服务。</div>
+                <div class="system-config-actions" style="justify-content:flex-start;">
+                    <button class="btn btn-success" data-save-scope="proxy" onclick="saveProxyConfig()">保存代理设置</button>
+                </div>
+                </div>
+                <div class="settings-subpanel" id="settingsSub8">
                     <section class="sys-section">
                         <div class="sys-section-head">
                             <div class="sys-section-title">腾讯云 COS 订阅</div>
@@ -4940,7 +4991,7 @@
                                 <strong>当前版本</strong>
                             </div>
                             <div class="about-version-body">
-                                <span id="versionText">v4.62.0</span>
+                                <span id="versionText">v4.70.0</span>
                                 <button class="btn btn-sm" onclick="checkUpdate()" id="checkUpdateBtn">检查更新</button>
                             </div>
                             <div id="updateInfo" class="about-update-info" style="display: none;"></div>
@@ -5021,16 +5072,6 @@
                                     </div>
                                     <a class="btn btn-sm btn-primary about-community-link" href="https://t.me/iFansClubChat" target="_blank" rel="noopener noreferrer" aria-label="加入 iFansClub Telegram 交流群（新标签页）">
                                         加入群聊
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 17 17 7M7 7h10v10" /></svg>
-                                    </a>
-                                </div>
-                                <div class="about-community-entry">
-                                    <div class="about-community-copy">
-                                        <strong class="about-community-name">公告频道</strong>
-                                        <span class="about-community-handle">@iFansClub</span>
-                                    </div>
-                                    <a class="btn btn-sm btn-primary about-community-link" href="https://t.me/iFansClub" target="_blank" rel="noopener noreferrer" aria-label="订阅 iFansClub Telegram 公告频道（新标签页）">
-                                        订阅频道
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 17 17 7M7 7h10v10" /></svg>
                                     </a>
                                 </div>
@@ -5129,7 +5170,7 @@
 
         // 设置页二级标签切换（issue #72）：只做显隐，各卡片数据在进入设置页(switchTab(2))时已统一刷新
         function switchSettingsTab(index) {
-            if (index === 7) loadCosConfig();
+            if (index === 8) loadCosConfig();
             fitSubtabPanelHeight(document.querySelector('.settings-panel'));
             document.querySelectorAll('.settings-subtabs .mode-switch-btn').forEach((b, i) => b.classList.toggle('active', i === index));
             document.querySelectorAll('.settings-subpanel').forEach((p, i) => p.classList.toggle('active', i === index));
@@ -5221,7 +5262,11 @@
             if (field.hidden) return '';
             const id = `xf-${moduleId}-${field.key}`;
             const label = escapeHtml(field.label || field.key);
-            const hint = field.hint ? `<div style="font-size:12px; color:#888; margin-top:3px;">${escapeHtml(field.hint)}</div>` : '';
+            // hint 可以是一句话，也可以是数组：三条以上要点写成数组，按编号列表显示，比一整段好读
+            const hintBody = Array.isArray(field.hint)
+                ? (field.hint.length ? `<ol class="hint-list">${field.hint.map(h => `<li>${escapeHtml(h)}</li>`).join('')}</ol>` : '')
+                : escapeHtml(field.hint || '');
+            const hint = hintBody ? `<div style="font-size:12px; color:#888; margin-top:3px;">${hintBody}</div>` : '';
             const envNote = envProvided[field.key]
                 ? `<div style="font-size:12px; color:#faad14; margin-top:3px;">当前值来自环境变量 <code>${escapeHtml(envProvided[field.key])}</code>，在此填写会覆盖它</div>`
                 : '';
@@ -5302,18 +5347,22 @@
             if (!input) return;
             const events = document.getElementById('youtubeEvents');
             let busy = false;
-            async function submit(action, fields) {
+            async function submit(action, fields, feedback = events) {
                 if (busy) return;
                 busy = true;
                 const controls = input.closest('.bookmarklet-section').querySelectorAll('button,input');
                 controls.forEach(el => { el.disabled = true; });
-                events.textContent = action === 'youtubeInspect' ? '正在查询 YouTube 场次…' : '正在更新订阅…';
+                feedback.textContent = action === 'youtubeInspect' ? '正在查询 YouTube 场次…'
+                    : action === 'youtubeCheck' ? '正在从部署机器检查直播入口，请稍候…' : '正在更新订阅…';
                 try {
                     const result = await extractorPost({ action, ...fields });
                     if (!input.isConnected) return;
-                    if (!result.success) { events.textContent = result.message || 'YouTube 请求失败'; return; }
+                    if (!result.success) { feedback.textContent = result.message || 'YouTube 请求失败'; return; }
+                    if (action === 'youtubeCheck') { feedback.textContent = result.message; return; }
                     if (action !== 'youtubeInspect') {
-                        applyExtractorResult(result, action === 'youtubeRemove' ? '已移除订阅' : '已关注频道，启用模块后可在 M3U 的 YouTube 直播分组观看');
+                        applyExtractorResult(result, action === 'youtubeRemove' ? '已移除订阅'
+                            : fields.pin ? '已订阅这一场，启用模块后可在 M3U 的 YouTube 直播分组观看'
+                            : '已关注频道，启用模块后可在 M3U 的 YouTube 直播分组观看');
                         return;
                     }
                     events.replaceChildren();
@@ -5324,16 +5373,23 @@
                     follow.onclick = () => submit('youtubeAdd', { url: 'https://www.youtube.com/channel/' + result.item.channelId });
                     heading.append(' ', follow);
                     events.append(heading);
+                    // 新闻台常同时开好几路，关注频道只播第一路；想看哪一路就单独订阅那一场
                     for (const event of result.events) {
                         const p = document.createElement('p');
-                        p.textContent = (event.status === 'is_live' ? '直播中 · ' : '已预约 · ') + event.name;
+                        const pin = document.createElement('button');
+                        pin.className = 'btn btn-sm'; pin.textContent = '订阅此场';
+                        pin.onclick = () => submit('youtubeAdd', { url: event.url, pin: true });
+                        p.append((event.status === 'is_live' ? '直播中 · ' : '已预约 · ') + event.name + ' ', pin);
                         events.append(p);
                     }
-                } catch { events.textContent = '无法连接源管理接口'; }
+                } catch { feedback.textContent = '无法连接源管理接口'; }
                 finally { busy = false; controls.forEach(el => { el.disabled = false; }); }
             }
             document.getElementById('youtubeInspect').onclick = () => submit('youtubeInspect', { url: input.value });
             document.getElementById('youtubeAdd').onclick = () => submit('youtubeAdd', { url: input.value });
+            for (const button of document.querySelectorAll('[data-youtube-check]')) {
+                button.onclick = () => submit('youtubeCheck', { ref: button.dataset.youtubeCheck }, button.parentElement.querySelector('[data-youtube-result]'));
+            }
             for (const button of document.querySelectorAll('[data-youtube-remove]')) {
                 button.onclick = () => submit('youtubeRemove', { ref: button.dataset.youtubeRemove });
             }
@@ -5367,7 +5423,8 @@
             const runtimeText = document.getElementById('youtubeRuntimeText');
             const checkBtn = document.getElementById('youtubeRuntimeCheck');
             const updateBtn = document.getElementById('youtubeRuntimeUpdate');
-            const describe = info => info.version ? `解析组件 yt-dlp ${info.version}` : '解析组件 yt-dlp：未安装';
+            // 读不到版本：本项目自己装的是「装坏了」（给修复），别处的才是「未安装」
+            const describe = info => info.version ? `解析组件 yt-dlp ${info.version}` : info.managed ? '解析组件 yt-dlp 无法运行' : '解析组件 yt-dlp：未安装';
             async function runtime(op) {
                 checkBtn.disabled = true; updateBtn.disabled = true;
                 if (op !== 'status') runtimeText.textContent = op === 'update' ? '正在更新 yt-dlp，通常半分钟内完成…' : '正在查询最新版本…';
@@ -5390,13 +5447,13 @@
                     }
                     let text = describe(info);
                     if (info.updating) { runtimeText.textContent = text + '，正在更新…'; updateBtn.hidden = true; return; }
-                    if (info.repairNeeded) text += '，配套依赖不完整，请修复';
-                    else if (op === 'check') text += info.outdated ? `，有新版本 ${info.latest}（${info.latestDate} 发布）` : '，已是最新版';
+                    if (info.repairNeeded) text += info.version ? '，配套依赖不完整，请修复' : '，请点「修复」重新安装';
+                    else if (op === 'check' && info.version) text += info.outdated ? `，有新版本 ${info.latest}（${info.latestDate} 发布）` : '，已是最新版';
                     if (!info.managed && info.reason) text += `。${info.reason}`;
                     if (op === 'check' && info.pythonNote) text += `（${info.pythonNote}）`;
                     runtimeText.textContent = text;
                     updateBtn.hidden = !(info.managed && (info.repairNeeded || (op === 'check' && info.outdated)));
-                    updateBtn.textContent = info.repairNeeded ? '修复依赖' : `更新到 ${info.latest || ''}`;
+                    updateBtn.textContent = info.repairNeeded ? (info.version ? '修复依赖' : '修复') : `更新到 ${info.latest || ''}`;
                 } catch { if (runtimeText.isConnected) runtimeText.textContent = '无法连接源管理接口'; }
                 finally { checkBtn.disabled = false; updateBtn.disabled = false; }
             }
@@ -5506,11 +5563,13 @@
                     <div class="bookmarklet-actions"><input type="text" id="youtubeInput" maxlength="2048" placeholder="用户名、频道 ID、频道或视频分享链接">
                     <button class="btn btn-sm" id="youtubeInspect">查看场次</button>
                     <button class="btn btn-sm btn-primary" id="youtubeAdd">关注频道</button></div>
-                    <p>频道、直播、视频和 Shorts 链接都用于关注所属频道。未开播时保留，播放时选择频道当前的首场公开直播。</p>
+                    <p>频道、直播、视频和 Shorts 链接都用于关注所属频道。未开播时保留，播放时选择频道当前的首场公开直播。同时开好几路的（如新闻台），点「查看场次」，在要看的那一场后面点「订阅此场」。</p>
                     <div id="youtubeEvents" aria-live="polite"></div>
                     <div id="youtubeEnded" class="youtube-ended" hidden></div>
                     <div id="youtubeSaved">${rows.length ? '' : '<p>还没有订阅。添加第一个频道后，它会出现在 M3U 的「YouTube 直播」分组。</p>'}${rows.map(row => `<p>${escapeHtml(row.name)} · ${row.videoId ? '固定场次' : '关注频道'}${row.videoId ? `<span class="youtube-status" data-youtube-status="${escapeHtml(row.videoId)}"></span>` : ''}
-                      <button class="btn btn-sm" data-youtube-remove="${escapeHtml(row.videoId || row.channelId)}">移除</button></p>`).join('')}</div>
+                      <button class="btn btn-sm" data-youtube-check="${escapeHtml(row.videoId || row.channelId)}">检查播放</button>
+                      <button class="btn btn-sm" data-youtube-remove="${escapeHtml(row.videoId || row.channelId)}">移除</button>
+                      <span data-youtube-result aria-live="polite" style="display:block; font-size:12px; margin-top:4px;"></span></p>`).join('')}</div>
                     <div class="youtube-runtime"><span id="youtubeRuntimeText">解析组件 yt-dlp：读取中…</span>
                       <button class="btn btn-sm" id="youtubeRuntimeCheck">检查更新</button>
                       <button class="btn btn-sm btn-primary" id="youtubeRuntimeUpdate" hidden>更新</button></div>
@@ -5527,7 +5586,10 @@
                     </div>
                     <div class="bookmarklet-actions"><a id="fengshowsBookmarklet" class="bookmarklet-link" draggable="true">获取凤凰秀 Token</a>
                         <a href="https://www.fengshows.com/live" target="_blank" rel="noreferrer">打开凤凰秀官网 ↗</a></div>
-                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;">普通账号即可获取三台 720p / 25 帧，无需付费会员。把“获取凤凰秀 Token”拖到书签栏，在已登录的官网点击，再将复制结果粘贴到下方并保存。也可在开发者工具 Application → Cookies 中复制 App.user.token。凭证过期后重新获取。</div>
+                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;">普通账号即可获取三台 720p / 25 帧，无需付费会员。<ol class="hint-list">
+                            <li>把“获取凤凰秀 Token”拖到书签栏，在已登录的官网点击。</li>
+                            <li>将复制结果粘贴到下方并保存。也可在开发者工具 Application → Cookies 中复制 <code>App.user.token</code>。</li>
+                        </ol>凭证过期后重新获取。</div>
                 </div>`;
             }
             if (key === 'migu-bookmarklet') {
@@ -5588,7 +5650,12 @@
                         <textarea id="yspLoginImportInput" rows="2" placeholder="粘贴从开发者工具复制的整段 Cookie 值（vusession=…; ysp_strRefreshtoken=…; …）" style="flex:1; min-width:240px; padding:6px 8px; border:1px solid #ddd; border-radius:4px; font-size:12px; font-family:monospace; resize:vertical;"></textarea>
                         <button id="yspLoginImport" class="btn btn-sm btn-primary" onclick="importYspLoginState()">导入登录态</button>
                     </div>
-                    <div style="font-size:12px; color:#888; margin-top:6px; line-height:1.7;">在自己电脑的浏览器登录央视频官网后，按 F12（Mac 按 ⌥⌘I）打开开发者工具，切到 Network（网络），刷新页面，点开任意一个 <code>yangshipin.cn</code> 的请求，在 Request Headers（请求标头）里单击 <code>Cookie</code> 的值后按 ⌘C（Windows 按 Ctrl+C）复制，粘贴到上方并导入。必须用这种方式：央视频的会话 cookie 是 HttpOnly，网页脚本和书签工具读不到，只有请求头里有完整的一套。导入的 cookie 只写进服务端浏览器 profile，不进配置文件；服务端之后会自动续期，官网撤销或长期失效时重新导入即可。</div>
+                    <div style="font-size:12px; color:#888; margin-top:6px; line-height:1.7;">在自己电脑的浏览器里：<ol class="hint-list">
+                            <li>登录央视频官网，按 F12（Mac 按 ⌥⌘I）打开开发者工具，切到 Network（网络）。</li>
+                            <li>刷新页面，点开任意一个 <code>yangshipin.cn</code> 的请求。</li>
+                            <li>在 Request Headers（请求标头）里单击 <code>Cookie</code> 的值，按 ⌘C（Windows 按 Ctrl+C）复制。</li>
+                            <li>粘贴到上方并导入。</li>
+                        </ol>必须用这种方式：央视频的会话 cookie 是 HttpOnly，网页脚本和书签工具读不到，只有请求头里有完整的一套。导入的 cookie 只写进服务端浏览器 profile，不进配置文件；服务端之后会自动续期，官网撤销或长期失效时重新导入即可。</div>
                 </div>`;
             }
             if (key === 'beijing-cookie') {
@@ -5603,7 +5670,12 @@
                     <div class="bookmarklet-actions">
                         <a href="https://www.btime.com/btv/btvsy_index" target="_blank" rel="noreferrer">打开北京时间官网 ↗</a>
                     </div>
-                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;">先在官网完成登录，再打开开发者工具的 Network（网络），刷新页面并点开 <code>getUserInfo</code> 请求。在 Request Headers 中单击 <code>Cookie</code> 的值后按 ⌘C（Windows/Linux 按 Ctrl+C），不需要鼠标右键；粘贴到下方并保存。Cookie 失效时重新导入即可。</div>
+                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;"><ol class="hint-list">
+                            <li>先在官网完成登录，再打开开发者工具的 Network（网络）。</li>
+                            <li>刷新页面，点开 <code>getUserInfo</code> 请求。</li>
+                            <li>在 Request Headers 中单击 <code>Cookie</code> 的值，按 ⌘C（Windows/Linux 按 Ctrl+C）复制，不需要鼠标右键。</li>
+                            <li>粘贴到下方并保存。</li>
+                        </ol>Cookie 失效时重新导入即可。</div>
                 </div>`;
             }
             if (key === 'sichuan-token') {
@@ -5621,7 +5693,11 @@
                         <a id="sichuanBookmarklet" class="bookmarklet-link" draggable="true">获取四川 Token</a>
                         <a href="https://www.sctv.com/channelLive" target="_blank" rel="noreferrer">打开四川官网 ↗</a>
                     </div>
-                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;">先在四川官网登录，并确认官网里电视频道能正常播放（官网只在播放时检查登录，页面显示已登录不代表还有效），然后把“获取四川 Token”拖到浏览器书签栏，在该页面点击书签。复制结果粘贴到下方并保存，再点“立即刷新”。兼容官网当前 <code>scgc_userAccountInfo</code> 和历史大小写写法。</div>
+                    <div style="font-size:12px; color:#888; margin-top:8px; line-height:1.7;"><ol class="hint-list">
+                            <li>先在四川官网登录，并确认官网里电视频道能正常播放（官网只在播放时检查登录，页面显示已登录不代表还有效）。</li>
+                            <li>把“获取四川 Token”拖到浏览器书签栏，在该页面点击书签。</li>
+                            <li>复制结果粘贴到下方并保存，再点“立即刷新”。</li>
+                        </ol>兼容官网当前 <code>scgc_userAccountInfo</code> 和历史大小写写法。</div>
                 </div>`;
             }
             return '';
@@ -5857,14 +5933,20 @@
         /**
          * 弹窗分节：分类的标题和顺序跟卡片区用同一份（extractorCategories），最后是「内置源」。
          * 分类没登记的模块收进「其他」——卡片区看不到它们，但「全不选」不能把它们漏掉。
+         * 市县台（county，散在二十来个省面板里）从免账号里拆出来、紧跟其后单独一节，
+         * 一次全开全关不用挨个省找；只是归节，写的还是各模块自己的开关。
          * 节 id 带 __ 前缀的是弹窗自己的，不会和注册表的分类 id 撞上。
          */
         function extractorBulkSections(state) {
             const modules = (state && state.modules) || [];
             const categories = extractorCategories();
             const known = new Set(categories.map(category => category.id));
-            const categoryOf = m => known.has(m.category || 'standard') ? (m.category || 'standard') : '__other';
-            const sections = categories.concat([{ id: '__other', title: '其他' }])
+            const categoryOf = m => m.county ? '__county'
+                : known.has(m.category || 'standard') ? (m.category || 'standard') : '__other';
+            const order = categories.flatMap(category => category.id === 'standard'
+                ? [category, { id: '__county', title: '市县台' }]
+                : [category]);
+            const sections = order.concat([{ id: '__other', title: '其他' }])
                 .map(category => ({
                     id: category.id,
                     title: category.title,
@@ -5924,14 +6006,15 @@
         }
 
         /**
-         * 摘要下面的额外提醒：关「内置订阅源」一下少约 150 个频道，在数字里只算 1 个，得单独说；
+         * 摘要下面的额外提醒：关「内置订阅源」一下少一整份精选列表，在数字里只算 1 个，得单独说；
          * 要打开的模块里有声明 enableNotice 的（辽宁：只放行部分网络），把那句话也列出来——
          * 卡片开关会先弹确认，批量勾选不弹，至少在点「应用」之前看得到。
          */
         function extractorBulkWarning(changes) {
             const notes = [];
             if (changes.contentFlags.enableBuiltInSubscriptions === false) {
-                notes.push('含「内置订阅源」：约 150 个精选频道将不再出现在播放列表里，随时可以开回来。');
+                const count = builtInSubscriptionChannelCount();
+                notes.push(`含「内置订阅源」：${count ? `${count} 个` : ''}精选频道将不再出现在播放列表里，随时可以开回来。`);
             }
             for (const module of (extractorsState && extractorsState.modules) || []) {
                 if (changes.modules[module.id] === true && module.enableNotice) notes.push(`「${module.name}」：${module.enableNotice}`);
@@ -6021,6 +6104,8 @@
                     </div>
                     ${section.id === '__builtin'
                         ? '<div class="extractor-bulk-note">自定义源（自己添加的直连 / 抓取 / 订阅源）不在这里，到「自定义源」标签里逐个启用或停用。</div>'
+                        : section.id === '__county'
+                        ? '<div class="extractor-bulk-note">各省的区县、地市融媒体台，频道多、默认关闭；卡片仍在「免账号」的本省面板里。</div>'
                         : ''}
                 </section>`).join('');
             paintExtractorBulk();
@@ -6335,7 +6420,7 @@
                     id: 'overseas',
                     title: '海外',
                     badge: '海外',
-                    description: ['面向大陆以外的频道，默认关闭，需要时手动打开。', { mark: '能不能看取决于网络：海外频道由播放器直连，看播放设备；澳门等后续其他独立模块还要部署的机器能连到大陆以外。' }],
+                    description: ['面向大陆以外的频道，默认关闭，需要时手动打开。', { mark: '能不能看取决于网络：部署在大陆的，到「设置 → 网络代理」填代理，视频改由服务器转发；没配代理时，YouTube、Red Bull TV 看部署机器的网络，海外频道看播放设备，澳门两头都要。' }],
                 },
             ];
             return categories;
@@ -6384,6 +6469,7 @@
                     <div class="source-card-title">
                         <span class="name">${escapeHtml(m.name)}</span>
                         <span class="source-badge ${escapeHtml(category.id)}">${escapeHtml(category.badge)}</span>
+                        ${m.outbound === 'proxy' ? '<span class="source-badge proxy" title="取址、清单和视频都走「设置 → 网络代理」里的代理；没配代理时沿用环境变量代理或直连">走代理</span>' : ''}
                         <label class="source-card-toggle" onclick="event.stopPropagation()" title="即时生效，无需保存">
                             启用
                             <input type="checkbox" role="switch" class="module-switch" ${m.enabled ? 'checked' : ''}
@@ -7896,7 +7982,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(myPlaylistConfig)
                 });
-                const result = await response.json();
+                const result = await readJsonResponse(response);
                 if (!result.success) {
                     myPlaylistConfig.hiddenRules = before;   // 存失败就回滚内存，别让界面显示一个没落盘的状态
                     showStatus(result.message || '保存失败', 'error');
@@ -8301,8 +8387,39 @@
         // 各源最近一次拉取失败的记账（服务端内存态，随 GET /api/external-sources 的 fetchStatus 带下来，
         // 按源 id 存 { failCount, lastError, nextRetryAt }）。单独存放、不进 externalConfig，整份保存时不会被 POST 回去
         let externalFetchStatus = {};
+        // 当前有没有生效的网络代理（'setting' 后台填的、'env' 环境变量 / 系统代理、'' 没有），随 GET /api/external-sources 带下来
+        let externalProxySource = '';
+
+        // 订阅、直连卡片上的「经网络代理转发」（字段 useProxy，服务端见 utils/customSourceProxy.js）。
+        // 内置模块走不走代理是固定的，这里只给用户自己加的源；没有生效代理时不能勾，已勾的可以取消
+        function externalProxyField(index, source, { list, saveLabel }) {
+            const checked = source.useProxy === true;
+            const available = !!externalProxySource;
+            const what = list ? '拉取列表、播放其中的 HLS 频道' : '播放这个频道（HLS）';
+            const hint = available
+                ? `<ol class="hint-list">
+                        <li>勾选后，${what}都经「设置 → 网络代理」，清单和视频由服务器转发，播放设备不用设代理。</li>
+                        <li>会用服务器的带宽和代理流量，同时看的人越多用得越多。</li>
+                        <li>${list ? '局域网地址、rtmp / udp 等非 HTTP 地址和 FLV 频道' : '局域网地址、非 HTTP 地址和 FLV'}照旧由播放器直连。</li>
+                        <li>代理软件用规则模式的，要自己放行这些频道的域名。</li>
+                        <li>改完点「${saveLabel}」生效。</li>
+                    </ol>`
+                : checked
+                    ? '当前没有生效的网络代理，这个源暂由播放器直连；在「设置 → 网络代理」填好代理后自动改为服务器转发。'
+                    : '要先在「设置 → 网络代理」填好代理才能勾选。';
+            return `
+                        <div class="external-field">
+                            <label>
+                                <input type="checkbox" ${checked ? 'checked' : ''} ${available || checked ? '' : 'disabled'} onchange="updateExternalField(${index}, 'useProxy', this.checked)">
+                                经网络代理转发
+                            </label>
+                            <div class="form-hint">${hint}</div>
+                        </div>`;
+        }
+
         function normalizeExternalConfig(payload) {
             if (payload && payload.fetchStatus && typeof payload.fetchStatus === 'object') externalFetchStatus = payload.fetchStatus;
+            if (payload && typeof payload.proxy === 'string') externalProxySource = payload.proxy;
             const data = payload && payload.data !== undefined ? payload.data : payload || {};
             if (Array.isArray(data)) {
                 return {
@@ -8336,7 +8453,23 @@
             return (builtInConfig.builtInSubscriptionUrls || []).includes(source.subscriptionUrl);
         }
 
+        /** 精选频道（内置订阅）上次解析出的频道数；还没拉到过就返回 null，调用方省掉数字而不是显示 0。 */
+        function builtInSubscriptionChannelCount() {
+            const source = (externalConfig.sources || []).find(isBuiltInSubscription);
+            const channels = source && source.parsedChannels;
+            return Array.isArray(channels) && channels.length ? channels.length : null;
+        }
+
+        // 「内置源 → 内置订阅源」卡片说明里的频道数。总开关关着也照样显示：那是打开后会回来的数量。
+        function renderBuiltInSubscriptionCount() {
+            const el = document.getElementById('cfBuiltInSubscriptionsCount');
+            if (!el) return;
+            const count = builtInSubscriptionChannelCount();
+            el.textContent = count ? `，现有 ${count} 个频道` : '';
+        }
+
         function renderExternalSources() {
+            renderBuiltInSubscriptionCount();
             const externalSourceList = document.getElementById('externalSourceList');
             const detail = document.getElementById('externalDetail');
             const wrap = document.getElementById('externalDetailWrap');
@@ -8419,13 +8552,13 @@
             addCard.innerHTML = '<span class="plus">＋</span><span>添加自定义源</span>';
             externalSourceList.insertBefore(addCard, externalSourceList.firstChild);
 
-            // 「来源于网络」快捷入口：还没订阅过才显示；订阅过（含刚填好未保存的）它就是一张普通卡片。
+            // 「网络分享」快捷入口：还没订阅过才显示；订阅过（含刚填好未保存的）它就是一张普通卡片。
             if (findFromTheWebSource() === -1) {
                 const ftwCard = document.createElement('div');
                 ftwCard.className = 'source-card-add';
                 ftwCard.title = '一键填好仓库 from-the-web 列表的订阅地址，再点「导入并保存」即可';
                 ftwCard.onclick = () => addFromTheWebSource();
-                ftwCard.innerHTML = '<span class="plus"></span><span>添加「来源于网络」列表</span><small>港澳台、新马、影视等网络第三方频道</small>';
+                ftwCard.innerHTML = '<span class="plus"></span><span>添加「网络分享」列表</span><small>港澳台、新马、影视等网络第三方频道</small>';
                 addCard.after(ftwCard);
             }
 
@@ -8905,9 +9038,9 @@
                             <div class="form-hint">填写包含多个频道的 m3u/m3u8 或 txt（频道名,地址）播放列表地址，系统会自动识别格式并解析其中的所有频道</div>
                             ${isFromTheWebUrl(source.subscriptionUrl) ? `
                             <div style="margin-top:8px;padding:8px 10px;background:#fffbe6;border:1px solid #ffe58f;border-radius:4px;font-size:12px;color:#8c6d1f;line-height:1.6;">
-                                这是仓库 from-the-web 里的<strong>网络第三方转发源</strong>，不是电视台官方地址：国内直连大多播不了，需要海外网络或路由器全局代理；本项目不维护，失效不作为 bug 处理。不想要了删掉这条订阅即可。<a href="${FROM_THE_WEB_README}" target="_blank" rel="noopener">收录范围 ↗</a>
+                                这是仓库 from-the-web 里的<strong>网络源订阅</strong>，包含第三方转发源、平台分发源及来源待确认的 CDN。第三方转发站国内直连大多播不了，其他线路按各自情况判断；需要代理时，可使用海外网络、路由器全局代理，或填好「设置 → 网络代理」后勾下方「经网络代理转发」；本项目不维护，失效不作为 bug 处理。不想要了删掉这条订阅即可。<a href="${FROM_THE_WEB_README}" target="_blank" rel="noopener">收录范围 ↗</a>
                             </div>` : (!isSaved && findFromTheWebSource(index) === -1 ? `
-                            <div class="form-hint">想加回以前精选列表里的港澳台、新马、影视等网络第三方频道？<a href="javascript:void(0)" onclick="fillFromTheWeb(${index})">一键填入「来源于网络」列表</a></div>` : '')}
+                            <div class="form-hint">想加回以前精选列表里的港澳台、新马、影视等网络第三方频道？<a href="javascript:void(0)" onclick="fillFromTheWeb(${index})">一键填入「网络分享」列表</a></div>` : '')}
                             ` : `
                             <input type="file" accept=".m3u,.m3u8,.txt,text/plain" onchange="onLocalFilePicked(${index}, this)" style="margin-bottom: 8px;">
                             <textarea oninput="updateExternalField(${index}, 'subscriptionContent', this.value)" placeholder="选择本地 .m3u/.m3u8/.txt 文件，或直接把播放列表内容粘贴到这里（支持 m3u/m3u8 与 txt「频道名,地址」格式，自动识别 GBK/UTF-8 编码）" style="width: 100%; min-height: 120px; font-family: monospace; font-size: 12px; box-sizing: border-box;">${(source.subscriptionContent || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>
@@ -8930,6 +9063,7 @@
                             </label>
                             <div class="form-hint">默认关闭。开启后，网页播放由服务器携带上方 UA 及频道自带请求头获取清单和视频分片，会占用服务器视频带宽；订阅内容和电视播放方式不变。修改后点「导入并保存」。</div>
                         </div>
+                        ${externalProxyField(index, source, { list: !source.localImport, saveLabel: '导入并保存' })}
                         ${!source.localImport ? `
                         <div class="external-field">
                             <div class="external-field-row">
@@ -8942,7 +9076,12 @@
                                     <input type="number" min="${SUBSCRIPTION_FETCH_RANGES.fetchRetries[0]}" max="${SUBSCRIPTION_FETCH_RANGES.fetchRetries[1]}" step="1" value="${escapeHtml(String(source.fetchRetries ?? ''))}" onchange="setSubscriptionFetchField(${index}, 'fetchRetries', this)" placeholder="0">
                                 </div>
                             </div>
-                            <div class="form-hint">总是「请求超时」时再调。超时从发起请求算到列表下载完，留空 15 秒，可填 5–120；重试留空为不重试，最多 3 次，只对超时、连接中断、服务器忙（5xx / 429）重试，404 这类直接算失败。GitHub raw 地址会依次试 5 条线路、每条各算一次超时，重试对它不生效。设得越大，这个源拉不到时其它源的自动刷新等得越久。</div>
+                            <div class="form-hint">总是「请求超时」时再调。<ol class="hint-list">
+                                <li>超时：从发起请求算到列表下载完，留空 15 秒，可填 5–120。</li>
+                                <li>重试：留空为不重试，最多 3 次；只对超时、连接中断、服务器忙（5xx / 429）重试，404 这类直接算失败。</li>
+                                <li>GitHub raw 地址会依次试 5 条线路、每条各算一次超时，重试对它不生效。</li>
+                                <li>设得越大，这个源拉不到时其它源的自动刷新等得越久。</li>
+                            </ol></div>
                         </div>` : ''}
                         <div class="external-field">
                             <label>默认分组</label>
@@ -9019,6 +9158,7 @@
                             <input type="text" value="${source.m3u8Url || ''}" oninput="updateExternalField(${index}, 'm3u8Url', this.value)" placeholder="例：https://example.com/live.m3u8">
                             <div class="form-hint">直接填写m3u8直播流地址</div>
                         </div>
+                        ${externalProxyField(index, source, { list: false, saveLabel: '保存' })}
                     </div>
                     <div class="external-detail-footer">
                         <div class="external-switches">
@@ -9099,7 +9239,7 @@
             renderExternalSources();
         }
 
-        // 「来源于网络」列表（issue #121）：清出精选列表的第三方转发源放在仓库 from-the-web/，
+        // 「网络分享」列表（issue #121）：清出精选列表的第三方转发源放在仓库 from-the-web/，
         // 镜像不带这个目录，只能订阅 GitHub 直链。公告里的教程是视频，地址没法复制，这里给一键填入。
         const FROM_THE_WEB_URL = 'https://raw.githubusercontent.com/akiralereal/iptv/main/from-the-web/from-the-web.m3u';
         const FROM_THE_WEB_README = 'https://github.com/akiralereal/iptv/tree/main/from-the-web';
@@ -9120,7 +9260,7 @@
                 return;
             }
             externalConfig.sources.unshift({
-                name: '来源于网络',
+                name: '网络分享',
                 group: '未分组',
                 enabled: true,
                 mode: 'subscription',
@@ -9143,11 +9283,11 @@
             const source = externalConfig.sources[index];
             if (!source) return;
             if (findFromTheWebSource(index) !== -1) {
-                showStatus('已经添加过「来源于网络」列表，不用再加一次', 'info');
+                showStatus('已经添加过「网络分享」列表，不用再加一次', 'info');
                 return;
             }
             source.subscriptionUrl = FROM_THE_WEB_URL;
-            if (!source.name || !source.name.trim()) source.name = '来源于网络';
+            if (!source.name || !source.name.trim()) source.name = '网络分享';
             setSaveDirty('ext');
             renderExternalSources();
         }
@@ -9644,7 +9784,7 @@
                     body: JSON.stringify({ action: 'save', sources: externalConfig })
                 });
 
-                const result = await response.json();
+                const result = await readJsonResponse(response);
                 if (response.ok && result.success !== false) {
                     showStatus(`${source.name} 保存成功并已同步到频道列表`, 'success');
                     setSaveDirty('ext', false);
@@ -9762,9 +9902,13 @@
         const dirtySaveScopes = new Set();
         let systemConfigEditVersion = 0;
         let systemConfigSaving = false;
+        // 「网络代理」是单独的标签和按钮，与系统配置各存各的，互不带上对方没保存的改动
+        let proxyEditVersion = 0;
+        let proxySaving = false;
 
         function setSaveDirty(scope, dirty = true) {
             if (scope === 'sysconfig' && dirty) systemConfigEditVersion++;
+            if (scope === 'proxy' && dirty) proxyEditVersion++;
             if (dirty) dirtySaveScopes.add(scope); else dirtySaveScopes.delete(scope);
             applySaveDirtyMarks();
         }
@@ -9809,11 +9953,32 @@
             }, 800);
         }
 
-        // 新提示出现时撤销上一条的隐藏定时器，统一停留 800ms。
+        // 新提示出现时撤销上一条的隐藏定时器，默认停留 800ms。
         let statusHideTimer = null;
 
-        /** 操作提示（success / error / info）统一在 800ms 后收起。 */
-        function showStatus(message, type) {
+        /**
+         * @param {string} message 提示文案
+         * @param {string} type    success / error / info
+         * @param {number} ms      停留时长，默认 800 毫秒。需要用户**记下内容**的提示要给足时间
+         *                         ——比如「访问入口已变更为 /xxx/admin」，它后面跟着一次跳转，
+         *                         提示比跳转先消失的话，这句话等于没说。
+         */
+        /** ms <= 0 表示不自动隐藏（页面已经没法用了、必须让用户看到的那种提示）。 */
+        /**
+         * 读接口回复里的 JSON。/api/* 一律回 JSON；拿到别的东西（反代、内网穿透层替服务答的错误页、
+         * 服务重启中的 502、入口密码不对时的 403 文本）就把状态码、类型和回复开头一起报出来。
+         * 浏览器自己的说法看不出是谁回的：Safari 只说「The string did not match the expected pattern」，
+         * Chrome 只说「Unexpected token '<'」，截图发过来没法判断。
+         */
+        async function readJsonResponse(response) {
+            const text = await response.text();
+            try { return JSON.parse(text); } catch { /* 下面报清楚 */ }
+            const type = (response.headers?.get?.('content-type') || '').split(';')[0].trim() || '未标类型';
+            const snippet = text.replace(/<(script|style)[^]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+            throw new Error(`服务回复不是 JSON（HTTP ${response.status} ${type}）${snippet ? '：' + snippet : '，内容为空'}；多半是反代、内网穿透层回的页面，或服务正在重启`);
+        }
+
+        function showStatus(message, type, ms = 800) {
             if (type === 'error') statusErrorSeq++;   // 供 toastSaved 判定「期间出过错」
             const status = document.getElementById('status');
             status.textContent = message;
@@ -9824,10 +9989,21 @@
             }, 10);
 
             if (statusHideTimer) clearTimeout(statusHideTimer);
-            statusHideTimer = setTimeout(() => {
+            if (ms > 0) statusHideTimer = setTimeout(() => {
                 statusHideTimer = null;
                 status.classList.remove('show');
-            }, 800);
+            }, ms);
+        }
+
+        // 规则模式的代理要放行的域名：来自各模块的声明（registry.js 的 proxyHosts），Telegram 推送固定在最后；没拿到名单就不显示这块
+        function proxyHostsHtml(config) {
+            const rows = (Array.isArray(config.proxyModules) ? config.proxyModules : [])
+                .filter(m => Array.isArray(m.hosts) && m.hosts.length)
+                .map(m => [m.name, m.hosts]);
+            if (Array.isArray(config.proxyTelegramHosts) && config.proxyTelegramHosts.length) rows.push(['Telegram 消息推送', config.proxyTelegramHosts]);
+            if (!rows.length) return '';
+            return rows.map(([name, hosts]) => `<div>${escapeHtml(name)}：<code>${hosts.map(escapeHtml).join(' ')}</code></div>`).join('')
+                + '<div>按域名后缀匹配（Clash 的 DOMAIN-SUFFIX），子域名一并走代理。海外频道的名单按频道表派生，表变了随版本更新。</div>';
         }
 
         // 渲染系统配置
@@ -9840,6 +10016,17 @@
             document.getElementById('sysEnableDisplayNameUnify').checked = systemConfig.enableDisplayNameUnify === true;
             document.getElementById('sysProxy').value = systemConfig.proxy || '';
             document.getElementById('sysProxyEnvHint').hidden = !systemConfig.proxyEnvFallback;
+            // 走代理的模块名单来自各模块的声明（registry.js 的 outbound: 'proxy'），不在页面里写死
+            const proxyScope = document.getElementById('sysProxyScope');
+            if (proxyScope && Array.isArray(systemConfig.proxyModules) && systemConfig.proxyModules.length) {
+                proxyScope.textContent = systemConfig.proxyModules.map(m => m.name).join('、');
+            }
+            const proxyHostsBox = document.getElementById('sysProxyHostsBox');
+            if (proxyHostsBox) {
+                const hostsHtml = proxyHostsHtml(systemConfig);
+                document.getElementById('sysProxyHosts').innerHTML = hostsHtml;
+                proxyHostsBox.hidden = !hostsHtml;
+            }
             invalidateProxyTest();
             renderEnvHints();
         }
@@ -10264,7 +10451,7 @@ if(success){
             } catch { showStatus('请选中订阅地址手动复制', 'error'); }
         }
         setInterval(() => {
-            if (document.getElementById('settingsSub7').classList.contains('active') && document.querySelector('.settings-panel').classList.contains('active') && !cosActionBusy) loadCosConfig();
+            if (document.getElementById('settingsSub8').classList.contains('active') && document.querySelector('.settings-panel').classList.contains('active') && !cosActionBusy) loadCosConfig();
         }, 5000);
 
         // 保存系统配置
@@ -10311,8 +10498,7 @@ if(success){
                     pass: passInput,
                     adminPath: adminPathInput,
                     programInfoUpdateInterval: document.getElementById('sysProgramInterval').value || '8',
-                    enableDisplayNameUnify: document.getElementById('sysEnableDisplayNameUnify').checked,
-                    proxy: document.getElementById('sysProxy').value.trim()
+                    enableDisplayNameUnify: document.getElementById('sysEnableDisplayNameUnify').checked
                 };
 
                 const response = await fetch(API_PREFIX + '/api/system-config', {
@@ -10323,7 +10509,7 @@ if(success){
                     body: JSON.stringify(config)
                 });
 
-                const result = await response.json();
+                const result = await readJsonResponse(response);
 
                 if (result.success) {
                     // 访问密码 / 管理页面路径任一变更，本页当前用的入口地址就已经失效了：
@@ -10380,6 +10566,48 @@ if(success){
         let proxyTestSequence = 0;
         let proxyTestController = null;
 
+        /**
+         * 保存「网络代理」标签：只提交 proxy，服务端按「显式提交才写」只改这一项，
+         * 系统配置标签里没保存的端口、密码等不会被顺带存掉。保存即生效，不用重启。
+         */
+        async function saveProxyConfig() {
+            if (proxySaving) return false;
+            proxySaving = true;
+            const editVersion = proxyEditVersion;
+            const controls = [...document.querySelectorAll('#settingsSub7 input, [data-save-scope="proxy"]')]
+                .map(el => ({ el, disabled: el.disabled }));
+            controls.forEach(({ el }) => { el.disabled = true; });
+            try {
+                const proxy = document.getElementById('sysProxy').value.trim();
+                const response = await fetch(API_PREFIX + '/api/system-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ proxy })
+                });
+                const result = await readJsonResponse(response);
+                if (!result.success) {
+                    showStatus(result.message || '保存失败', 'error');
+                    return false;
+                }
+                const editedWhileSaving = proxyEditVersion !== editVersion;
+                setSaveDirty('proxy', editedWhileSaving);
+                if (editedWhileSaving) {
+                    showStatus('提交时的代理地址已保存；后续修改尚未保存', 'info');
+                    return false;
+                }
+                showStatus(proxy ? '网络代理已保存，立即生效' : '已清空代理地址，立即生效', 'success');
+                // 自定义源卡片上「经网络代理转发」能不能勾跟着变，不用刷新页面
+                externalProxySource = proxy ? 'setting' : (systemConfig && systemConfig.proxyEnvFallback ? 'env' : '');
+                return true;
+            } catch (error) {
+                showStatus('保存失败: ' + error.message, 'error');
+                return false;
+            } finally {
+                proxySaving = false;
+                controls.forEach(({ el, disabled }) => { el.disabled = disabled; });
+            }
+        }
+
         function invalidateProxyTest() {
             proxyTestSequence++;
             proxyTestController?.abort();
@@ -10410,16 +10638,31 @@ if(success){
                     signal: controller.signal,
                     body: JSON.stringify({ proxy })
                 });
-                const data = await res.json();
+                const data = await readJsonResponse(res);
                 if (!isCurrent()) return;
                 if (!data.success) {
                     out.innerHTML = `<span class="fail">${escapeHtml(data.message || '测试失败')}</span>`;
                     return;
                 }
                 const via = { input: '经输入的代理', env: '留空，使用环境变量或系统代理' }[data.via] || '留空，使用直连';
-                out.innerHTML = `<div>${via}：</div>` + (data.results || []).map(r => r.ok
+                const results = data.results || [];
+                const okCount = results.filter(r => r.ok).length;
+                // 先一句总结代理本身通不通，再逐项列：对方站点断开的那几项别让人误以为是代理坏了、反复改地址
+                const summary = okCount ? `${data.via ? '代理可用，' : ''}${okCount}/${results.length} 项能连上`
+                    : data.via && data.proxyReachable === false ? '连不上代理'
+                    : data.via && data.proxyReachable ? `代理可用，但 ${results.length} 项都没连上`
+                    : `${results.length} 项都没连上`;
+                const afterProxy = data.via && results.some(r => !r.ok && r.stage === 'target');
+                // 断在代理之后的项把该模块要放行的域名（服务端按模块声明带回）直接列出来，规则模式的代理照着加就行
+                const toAllow = afterProxy ? results.filter(r => !r.ok && r.stage === 'target' && Array.isArray(r.hosts) && r.hosts.length) : [];
+                const fixHint = toAllow.length
+                    ? '代理软件用规则模式的，把下面列的域名加进走代理的规则（按后缀匹配）或切全局模式；节点连不上的换个节点，改完再测，'
+                    : '改分流规则或换节点后再测，';
+                out.innerHTML = `<div>${via}：<strong class="${okCount ? 'ok' : 'fail'}">${summary}</strong></div>` + results.map(r => r.ok
                     ? `<div class="ok">✓ ${escapeHtml(r.name)} 能连上（${r.ms} 毫秒）</div>`
-                    : `<div class="fail">✗ ${escapeHtml(r.name)}：${escapeHtml(r.message || '连不上')}</div>`).join('');
+                    : `<div class="fail">✗ ${escapeHtml(r.name)}：${escapeHtml(r.message || '连不上')}</div>`).join('')
+                    + (afterProxy ? `<div>标「代理已接通」的几项断在代理之后：代理软件把这些域名分流成了直连、所用节点连不上它们，或对方站点拒绝了这个出口。${fixHint}这边的代理地址不用改。</div>` : '')
+                    + toAllow.map(r => `<div>${escapeHtml(r.name)} 需放行：<code>${r.hosts.map(escapeHtml).join(' ')}</code></div>`).join('');
             } catch (error) {
                 if (!isCurrent()) return;
                 const message = error.name === 'AbortError' ? '请求超时，请重试' : error.message;
@@ -10665,7 +10908,7 @@ if(success){
                     method: 'POST'
                 });
 
-                const result = await response.json();
+                const result = await readJsonResponse(response);
 
                 if (result.success) {
                     if (portChanged) {
@@ -10737,7 +10980,7 @@ if(success){
         let searchSelectedKeys = new Set();    // 搜索结果里勾选的频道，按 searchResultKey 记（同一 ID 可能出现在两个原始分组）
         let lastSearchMoveTarget = '';         // 上次从搜索结果移到的分组，连搜几个关键字时不用每次重选
         const SYSTEM_ANNOUNCEMENT_ID = 'iptv-announcement';
-        // 系统频道：公告 + 央视频登录教程 + 「来源于网络」添加教程，都在「公告」分组、可逐条隐藏、不能删/移/改名/改序。
+        // 系统频道：公告 + 央视频登录教程 + 「网络分享」添加教程，都在「公告」分组、可逐条隐藏、不能删/移/改名/改序。
         // 与服务端 utils/announcement.js 的 SYSTEM_CHANNELS 对应。
         const SYSTEM_CHANNEL_IDS = new Set([SYSTEM_ANNOUNCEMENT_ID, 'iptv-ysp-login-guide', 'iptv-from-the-web-guide']);
         const SYSTEM_CHANNEL_NOTES = {
@@ -10904,7 +11147,7 @@ if(success){
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ profileId, sourceId, enabled })
                 });
-                const r = await res.json();
+                const r = await readJsonResponse(res);
                 if (!r.success) { showStatus(r.message || '保存失败', 'error'); return; }
                 if (sourceProfileData) sourceProfileData.disabled[profileId] = r.data.disabledSources;
                 // 同步本地整份配置副本：避免「我的频道」后续整份保存把刚设置的禁源带回旧值
@@ -12012,7 +12255,7 @@ if(success){
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(config)
                 });
-                const result = await response.json();
+                const result = await readJsonResponse(response);
                 if (!result.success) failure = '保存失败';
             } catch (error) {
                 failure = '保存失败: ' + error.message;
@@ -12796,7 +13039,7 @@ if(success){
                     body: JSON.stringify(myPlaylistConfig)
                 });
 
-                const result = await response.json();
+                const result = await readJsonResponse(response);
                 if (result.success) {
                     showStatus('配置已保存', 'success');
                 } else {

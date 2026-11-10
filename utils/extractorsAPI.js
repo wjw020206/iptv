@@ -10,7 +10,7 @@
  */
 import { getExtractorManager } from "./extractorManager.js"
 import { getModule, listModules } from "../extractors/registry.js"
-import { clearResolveCache as clearYouTubeCache, eventStatuses as youtubeEventStatuses, inspect as inspectYouTube, records as youtubeRecords, refOf as youtubeRef } from "../extractors/youtube-live/api.js"
+import { checkPlayback as checkYouTubePlayback, clearResolveCache as clearYouTubeCache, eventStatuses as youtubeEventStatuses, inspect as inspectYouTube, inspectEvent as inspectYouTubeEvent, records as youtubeRecords, refOf as youtubeRef } from "../extractors/youtube-live/api.js"
 import { runtimeStatus as youtubeRuntimeStatus, updateRuntime as updateYouTubeRuntime } from "../extractors/youtube-live/runtime.js"
 import { setSystemFlagAPI } from "./systemConfigAPI.js"
 import { enableBuiltInSources, enableBuiltInSubscriptions } from "../config.js"
@@ -315,11 +315,17 @@ export const importBrowserLoginAPI = (id, payload) => {
 }
 
 /** 查询只返回公开频道/场次标识。增删复用模块配置、刷新和订阅生成流程。 */
-export async function youtubeSubscriptionAPI({ action, url, ref, refs, op }) {
+export async function youtubeSubscriptionAPI({ action, url, ref, refs, op, pin }) {
   try {
     const manager = getExtractorManager()
     const module = getModule('youtube-live')
     if (action === 'youtubeInspect') return { success: true, ...await inspectYouTube(url) }
+    if (action === 'youtubeCheck') {
+      const config = manager.effectiveConfig(module)
+      const item = youtubeRecords(config).find(row => (row.videoId || row.channelId) === ref)
+      if (!item) throw new Error('没有此 YouTube 订阅')
+      return await checkYouTubePlayback(youtubeRef(item), config)
+    }
     // 固定场次的状态（直播中 / 已预约 / 已结束 / 失效），后台据此标出可以移除的
     if (action === 'youtubeStatus') {
       return { success: true, statuses: await youtubeEventStatuses(youtubeRecords(manager.effectiveConfig(module))) }
@@ -329,7 +335,10 @@ export async function youtubeSubscriptionAPI({ action, url, ref, refs, op }) {
       if (op === 'update') return { success: true, ...await updateYouTubeRuntime({ onUpdated: clearYouTubeCache }) }
       return { success: true, ...await youtubeRuntimeStatus({ checkLatest: op === 'check' }) }
     }
-    const item = action === 'youtubeAdd' ? (await inspectYouTube(url, { includeEvents: false })).item : null
+    // pin：「查看场次」里点「订阅此场」，固定这一场；其余链接一律关注所属频道
+    const item = action !== 'youtubeAdd' ? null
+      : pin === true ? await inspectYouTubeEvent(url)
+      : (await inspectYouTube(url, { includeEvents: false })).item
     // 网络查询完成后再读最新配置，并发添加不会覆盖其他刚保存的订阅。
     const rows = youtubeRecords(manager.effectiveConfig(module))
     let next
@@ -348,7 +357,7 @@ export async function youtubeSubscriptionAPI({ action, url, ref, refs, op }) {
     manager.updateModuleConfig(module.id, { subscriptions: JSON.stringify(next) })
     if (manager.isModuleEnabled(module)) regeneratePlaylist()
     return ok(manager)
-  } catch (error) { return fail(error) }
+  } catch (error) { return { ...fail(error), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) } }
 }
 
 /** 单模块开关。 */

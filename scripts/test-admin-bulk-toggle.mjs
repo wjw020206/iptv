@@ -28,7 +28,7 @@ const BULK_FUNCTIONS = [
   'toggleExtractorBulkItem', 'setExtractorBulkSection', 'setExtractorBulkAll', 'resetExtractorBulk',
   'syncExtractorBulkBase', 'applyExtractorBulk', 'extractorBulkBlocked',
 ]
-const SHARED_FUNCTIONS = ['escapeHtml', 'extractorCategories', 'applyExtractorResult']
+const SHARED_FUNCTIONS = ['escapeHtml', 'extractorCategories', 'applyExtractorResult', 'isBuiltInSubscription', 'builtInSubscriptionChannelCount']
 
 // 模块清单仿 getState()：分类齐全，海外两个默认关；gdtv 故意不带 category，应按免账号处理
 const MODULES = [
@@ -124,6 +124,8 @@ function bulkHarness(initialState, { post } = {}) {
   })
   vm.runInContext([
     'var extractorsState = null, extractorBulkBase = null, extractorBulkDraft = null, extractorBulkBusy = false, extractorBulkSession = 0;',
+    // 精选频道的数量从这两份页面副本里读；默认没加载到，提醒里省掉数字
+    'var externalConfig = { sources: [] }, builtInConfig = {};',
     ...[...SHARED_FUNCTIONS, ...BULK_FUNCTIONS].map(functionSource),
   ].join('\n'), context)
   context.extractorsState = initialState
@@ -209,6 +211,40 @@ await check('快照与分节：缺省内置源视为开，分类顺序同卡片�
   assert.deepEqual(plain(h.context.extractorBulkSections({ modules: [{ id: 'x', name: 'X', category: 'live' }] })).map(s => s.id), ['live', '__builtin'])
 })
 
+await check('市县台（county）从免账号拆出、紧跟其后单独一节；节内全开只写这些模块各自的开关', async () => {
+  const state = stateOf()
+  state.modules.push(
+    { id: 'shandong-counties', name: '山东市县', county: true, enabled: false },
+    { id: 'guangdianyun-hebei', name: '市县台·河北', county: true, enabled: true },
+    { id: 'guangdianyun-hunan', name: '市县台·湖南', county: true, enabled: false },
+  )
+  const h = bulkHarness(state)
+  const sections = plain(h.context.extractorBulkSections(state))
+  assert.deepEqual(sections.map(s => s.id), ['account', 'live', 'standard', '__county', 'overseas', '__builtin'])
+  assert.equal(sections[3].title, '市县台')
+  assert.deepEqual(sections[2].items.map(item => item.id), ['ipanda', 'gdtv', 'hbtv'], '市县台不再混在免账号里')
+  assert.deepEqual(sections[3].items.map(item => item.id), ['shandong-counties', 'guangdianyun-hebei', 'guangdianyun-hunan'])
+  // 没有市县台模块（老版本后端没回传 county）就不出这一节
+  assert.equal(plain(h.context.extractorBulkSections(stateOf())).some(s => s.id === '__county'), false)
+
+  h.context.openExtractorBulk()
+  assert.equal(h.section('__county').count.textContent, '已选 1/3')
+  assert.match(h.body.innerHTML, /卡片仍在「免账号」的本省面板里/)
+  h.context.setExtractorBulkSection(h.section('__county').buttons[0], true)
+  assert.equal(h.section('__county').count.textContent, '已选 3/3')
+  assert.equal(h.section('standard').count.textContent, '已选 3/3', '不碰免账号节')
+  assert.equal(h.summary(), '将启用 2 个')
+  await h.apply()
+  assert.deepEqual(h.posts, [{ action: 'bulkToggle', modules: { 'shandong-counties': true, 'guangdianyun-hunan': true } }])
+
+  const off = bulkHarness(state)
+  off.context.openExtractorBulk()
+  off.context.setExtractorBulkSection(off.section('__county').buttons[1], false)
+  assert.equal(off.summary(), '将关闭 1 个')
+  await off.apply()
+  assert.deepEqual(off.posts, [{ action: 'bulkToggle', modules: { 'guangdianyun-hebei': false } }])
+})
+
 await check('issue #189：全不选后只勾回央视频 / 凤凰 / 咪咕，一次请求只带真正要改的', async () => {
   const after = stateOf({ sichuan: false, 'bilibili-live': false, 'huya-live': false, ipanda: false, gdtv: false, hbtv: false },
     { enableBuiltInSources: false, enableBuiltInSubscriptions: false })
@@ -228,7 +264,7 @@ await check('issue #189：全不选后只勾回央视频 / 凤凰 / 咪咕，一
   h.context.setExtractorBulkAll(false)
   assert.equal(h.summary(), '将关闭 11 个', '9 个开着的模块 + 2 个内置源；本来就关的海外不算')
   assert.equal(h.elements.extractorBulkWarning.hidden, false)
-  assert.match(h.elements.extractorBulkWarning.textContent, /约 150 个精选频道/)
+  assert.equal(h.elements.extractorBulkWarning.textContent, '含「内置订阅源」：精选频道将不再出现在播放列表里，随时可以开回来。', '没拉到过精选列表就不写数字')
   for (const id of ['migu', 'fengshows', 'yangshipin']) h.click(id, true)
   assert.equal(h.summary(), '将关闭 8 个')
   assert.equal(h.section('account').count.textContent, '已选 3/4')
@@ -423,6 +459,40 @@ await check('名字和 id 一律转义，id 只进 data-*，不拼进 onclick �
   assert.equal(h.summary(), '将关闭 1 个')
 })
 
+await check('关内置订阅源的提醒写精选列表实际解析出的数量，不写死', () => {
+  const BUILT_IN_URL = 'https://raw.githubusercontent.com/akiralereal/iptv/refs/heads/main/IPTV.m3u'
+  const h = bulkHarness(stateOf())
+  h.context.builtInConfig = { builtInSubscriptionUrls: [BUILT_IN_URL] }
+  h.context.externalConfig = { sources: [
+    // 用户自己加的订阅排在前面，频道再多也不能算进精选列表
+    { mode: 'subscription', subscriptionUrl: 'https://example.com/mine.m3u', parsedChannels: new Array(34).fill({}) },
+    { mode: 'subscription', subscriptionUrl: BUILT_IN_URL, parsedChannels: new Array(20).fill({}) },
+  ] }
+  h.context.openExtractorBulk()
+  h.context.setExtractorBulkAll(false)
+  assert.equal(h.elements.extractorBulkWarning.textContent, '含「内置订阅源」：20 个精选频道将不再出现在播放列表里，随时可以开回来。')
+
+  h.context.externalConfig.sources[1].parsedChannels = null
+  h.context.setExtractorBulkAll(true)
+  h.context.setExtractorBulkAll(false)
+  assert.equal(h.elements.extractorBulkWarning.textContent, '含「内置订阅源」：精选频道将不再出现在播放列表里，随时可以开回来。', '还没拉到就省掉数字，不显示 0')
+})
+
+await check('「内置订阅源」卡片说明按已解析的数量填频道数', () => {
+  const el = { textContent: 'stale' }
+  const context = vm.createContext({ document: { getElementById: id => (id === 'cfBuiltInSubscriptionsCount' ? el : null) } })
+  vm.runInContext([
+    "var builtInConfig = { builtInSubscriptionUrls: ['u'] }, externalConfig = { sources: [{ subscriptionUrl: 'u', parsedChannels: [1, 2, 3] }] };",
+    ...['isBuiltInSubscription', 'builtInSubscriptionChannelCount', 'renderBuiltInSubscriptionCount'].map(functionSource),
+  ].join('\n'), context)
+  context.renderBuiltInSubscriptionCount()
+  assert.equal(el.textContent, '，现有 3 个频道')
+  context.externalConfig = { sources: [] }
+  context.renderBuiltInSubscriptionCount()
+  assert.equal(el.textContent, '', '没有内置订阅时清空，不留旧数字')
+  assert.doesNotMatch(admin, /约 150 个/, '卡片与提醒都不再写死频道数')
+})
+
 const NOTICE = '官方接口曾经只放行辽宁本地网络，请自行辨别。'
 const withNoticeModule = enabled => {
   const state = stateOf()
@@ -439,7 +509,7 @@ await check('批量勾上声明了 enableNotice 的模块，摘要下面列出�
   assert.equal(h.elements.extractorBulkWarning.textContent, `「辽宁」：${NOTICE}`)
   h.context.setExtractorBulkAll(false)
   assert.doesNotMatch(h.elements.extractorBulkWarning.textContent, /辽宁/, '勾掉后提示跟着消失')
-  assert.match(h.elements.extractorBulkWarning.textContent, /约 150 个精选频道/)
+  assert.match(h.elements.extractorBulkWarning.textContent, /含「内置订阅源」：精选频道将不再出现/)
 
   const on = bulkHarness(withNoticeModule(true))
   on.context.openExtractorBulk()

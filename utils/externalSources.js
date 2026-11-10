@@ -9,6 +9,8 @@ import { collectOptsUntilUrl, cleanUserAgent, withUserAgent } from "./channelOpt
 import { parseCatchupAttrs, resolveCatchup, sanitizeCatchup } from "./channelCatchup.js"
 import { FailureBackoff } from "./refreshBackoff.js"
 import fetch from 'node-fetch'
+import { customSourceFetch, proxiableUrl, proxyRefFor } from "./customSourceProxy.js"
+import { outboundProxyUrl } from "./outboundProxy.js"
 
 /**
  * 从一行 #EXTINF 提取频道显示名。
@@ -51,7 +53,7 @@ function parseM3uContent(content) {
     // 解析 #EXTINF 行
     const groupMatch = line.match(/group-title="([^"]*)"/)
     const logoMatch = line.match(/tvg-logo="([^"]*)"/)
-    // 仓库自己的海外频道表用它标「服务端转发主清单、最高档挪到最前」的台（extractors/overseas）
+    // 海外模块和自定义订阅共用：服务端现取主清单，把最高档挪到最前。
     const topFirst = /\sx-top-first="(?:1|true)"/i.test(line)
     const name = extractExtinfName(line)
     // 源自带的回看模板 / 天数：不收下就只能继承订阅头的咪咕模板，回看静默失效（issue #190）
@@ -269,6 +271,8 @@ function splitCredentials(rawUrl) {
  */
 function describeFetchError(error) {
   if (error?.name === 'AbortError' || error?.type === 'aborted') return '请求超时'
+  // 经网络代理拉的（customSourceFetch 挂上的）：认得出是哪一段就用翻好的话，认不出照旧给错误码
+  if (error?.proxyFailure?.stage) return error.proxyFailure.message
   return error?.code || error?.cause?.code || error?.cause?.message || error?.message || '未知错误'
 }
 
@@ -330,8 +334,10 @@ const isRetryableStatus = (status) => status >= 500 || status === 408 || status 
 function isRetryableFetchError(error) {
   if (typeof error?.retryable === 'boolean') return error.retryable
   if (error?.name === 'AbortError' || error?.type === 'aborted') return true
-  // node-fetch 对不合法地址、不支持的协议抛 TypeError；网络层错误是 FetchError
-  return !(error instanceof TypeError)
+  // node-fetch 对不合法地址、不支持的协议抛 TypeError；网络层错误是 FetchError。
+  // undici（开了「经网络代理转发」的源用它）的网络层错误也是 TypeError，固定写 fetch failed，原因在 cause 里
+  if (error instanceof TypeError) return error.message === 'fetch failed' && error.cause != null
+  return true
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
@@ -498,7 +504,7 @@ const DEFAULT_CUSTOM_SUBSCRIPTIONS = [
   {
     match: /\/from-the-web\/from-the-web\.m3u(\?|#|$)/,
     source: {
-      name: '来源于网络',
+      name: '网络分享',
       group: '未分组',
       enabled: true,
       mode: 'subscription',
@@ -513,6 +519,19 @@ const DEFAULT_CUSTOM_SUBSCRIPTIONS = [
     },
   },
 ]
+
+// 只迁移这份仓库订阅的两个旧名称；一次性执行，之后仍允许用户自行改名。
+function migrateNetworkShareName(config) {
+  if (!config || !Array.isArray(config.sources) || config.networkShareNameV1) return false
+  for (const source of config.sources) {
+    if (source?.mode !== 'subscription') continue
+    const url = String(source.subscriptionUrl || '').trim()
+    if (!/\/akiralereal\/iptv\/(?:refs\/heads\/)?main\/from-the-web\/from-the-web\.m3u(?:[?#]|$)/.test(url)) continue
+    if (['海外', '来源于网络'].includes(String(source.name || '').trim())) source.name = '网络分享'
+  }
+  config.networkShareNameV1 = true
+  return true
+}
 
 /**
  * 播种默认自定义订阅（只播一次，尊重删除）。已有同一份列表（任何写法）就只记账不加。
@@ -542,6 +561,26 @@ function ensureDefaultCustomSubscriptions(config) {
 const BUILT_IN_SUBSCRIPTION_URLS = new Set(BUILT_IN_SUBSCRIPTIONS.map(b => b.subscriptionUrl))
 function isBuiltInSubscriptionSource(source) {
   return !!(source && source.subscriptionUrl && BUILT_IN_SUBSCRIPTION_URLS.has(source.subscriptionUrl))
+}
+
+/**
+ * 这个源有没有开「经网络代理转发」（customSourceProxy.js）。只认用户自己加的订阅源和直连源：
+ * 内置「精选频道」订阅不认（它和内置模块一样不让用户改出站），抓取模式不认（网页抓取由浏览器做，不经这个代理）。
+ */
+function sourceUsesProxy(source) {
+  if (!source || source.useProxy !== true || isBuiltInSubscriptionSource(source)) return false
+  if (source.mode === 'subscription') return true
+  const mode = source.mode || (String(source.webUrl || '').trim() ? 'fetch' : 'direct')
+  return mode === 'direct'
+}
+
+// 两种处理共用稳定入口，出站是否经网络代理独立记录；普通频道仍保留原地址。
+function customPlaybackFields(source, name, url, topFirst) {
+  const mode = source.mode || (String(source.webUrl || '').trim() ? 'fetch' : 'direct')
+  if (!source.id || isBuiltInSubscriptionSource(source) || !['subscription', 'direct'].includes(mode) || !proxiableUrl(url)) return {}
+  const useProxy = sourceUsesProxy(source)
+  if (!useProxy && topFirst !== true) return {}
+  return { proxyRef: proxyRefFor(source.id, name, url), useProxy, topFirst: topFirst === true }
 }
 
 // 播种内置订阅源（精选频道）。
@@ -628,8 +667,8 @@ function inheritExistingSourceIds(incoming, current) {
 // 于是这两个账本每次保存都被静默抹掉。
 //
 // 实测：删掉「精选频道」→ 后台随便保存一次 → 重启，它就回来了。
-// seededDefaultSubscriptions 同理：「哪些默认自定义订阅已经播种过」，丢了删掉的「来源于网络」会复活
-const SERVER_OWNED_KEYS = ['seededBuiltInUrls', 'retiredBuiltInsV1', 'seededDefaultSubscriptions']
+// seededDefaultSubscriptions 同理：「哪些默认自定义订阅已经播种过」，丢了删掉的「网络分享」会复活
+const SERVER_OWNED_KEYS = ['seededBuiltInUrls', 'retiredBuiltInsV1', 'seededDefaultSubscriptions', 'networkShareNameV1']
 
 /**
  * 把内置订阅源**重新**播种回来（用户在「内置源」那一段主动打开开关时调用）。
@@ -690,6 +729,7 @@ function playlistFingerprint(source) {
 class ExternalSourceManager {
   
   constructor() {
+    this.revision = 0
     this.sources = this.loadSources()
     // 网页抓取失败的退避（内存态）。抓取失败不会更新 lastUpdated，否则到期的源
     // 会在每个 5 分钟 tick 都起一次 Chromium 重抓（见 refreshBackoff.js）
@@ -714,6 +754,7 @@ class ExternalSourceManager {
         lastGlobalUpdate: null
       }
       ensureDefaultCustomSubscriptions(defaultConfig)
+      migrateNetworkShareName(defaultConfig)
       ensureSourceIds(defaultConfig)
 
       this.saveSources(defaultConfig)
@@ -736,8 +777,9 @@ class ExternalSourceManager {
         const retired = retireBuiltInSubscriptions(config)
         const mutated = ensureBuiltInSubscriptions(config)
         const defaultsAdded = ensureDefaultCustomSubscriptions(config)
+        const renamed = migrateNetworkShareName(config)
         const idsAdded = ensureSourceIds(config)   // 存量源补稳定 id（issue #29/#68）
-        if (retired || mutated || defaultsAdded || idsAdded) this.saveSources(config)
+        if (retired || mutated || defaultsAdded || renamed || idsAdded) this.saveSources(config)
         return config
       }
       if (typeof parsed === 'object' && parsed !== null) {
@@ -758,9 +800,10 @@ class ExternalSourceManager {
         // 播种内置订阅源（只播种从未播种过的；尊重用户删除）
         const retired = retireBuiltInSubscriptions(parsed)
         const mutated = ensureBuiltInSubscriptions(parsed)
-        const defaultsAdded = ensureDefaultCustomSubscriptions(parsed)   // 「来源于网络」等，只播一次
+        const defaultsAdded = ensureDefaultCustomSubscriptions(parsed)   // 「网络分享」等，只播一次
+        const renamed = migrateNetworkShareName(parsed)
         const idsAdded = ensureSourceIds(parsed)   // 存量源补稳定 id（issue #29/#68）
-        if (retired || mutated || defaultsAdded || idsAdded) this.saveSources(parsed)
+        if (retired || mutated || defaultsAdded || renamed || idsAdded) this.saveSources(parsed)
         return parsed
       }
       return { enabled: false, includeInPlaylists: true, updateOnStartup: true, sources: [] }
@@ -793,6 +836,8 @@ class ExternalSourceManager {
       ensureSourceIds(sources)
       writeJsonFileSync(EXTERNAL_SOURCES_PATH, sources)
       this.sources = sources
+      // 改写过的频道地址都是落盘后才生效的：经代理转发的播放索引按这个版本号重建（customSourceProxy.js）
+      this.revision++
       return { success: true }
     } catch (error) {
       printRed(`保存外部源配置失败: ${error.message}`)
@@ -838,7 +883,10 @@ class ExternalSourceManager {
         ...sourceConfig.extractOptions
       },
       ...catchup,
-      ...(Object.keys(catchup).length ? { catchupUrl: sourceConfig.m3u8Url || "" } : {})
+      ...(Object.keys(catchup).length ? { catchupUrl: sourceConfig.m3u8Url || "" } : {}),
+      // 从开了「经网络代理转发」的源复制出来的副本照样走代理（见 copyChannelToGroupsAPI）
+      ...(sourceConfig.useProxy === true ? { useProxy: true } : {}),
+      ...(sourceConfig.topFirst === true ? { topFirst: true } : {})
     }
     
     this.sources.sources.push(newSource)
@@ -968,9 +1016,11 @@ class ExternalSourceManager {
       return { success: true, skipped: true, message: '内置订阅源已禁用，跳过抓取' }
     }
 
-    const fetchOptions = subscriptionFetchOptions(source)
+    // 开了「经网络代理转发」且有生效代理：列表也经代理拉（局域网地址照旧直连）；没有代理就照常直连
+    const viaProxy = sourceUsesProxy(source) && Boolean(outboundProxyUrl())
+    const fetchOptions = { ...subscriptionFetchOptions(source), ...(viaProxy ? { fetchImpl: customSourceFetch } : {}) }
     try {
-      printBlue(`更新订阅源: ${source.name} (${source.subscriptionUrl})`)
+      printBlue(`更新订阅源: ${source.name} (${source.subscriptionUrl})${viaProxy ? '，经网络代理' : ''}`)
       const channels = await fetchAndParseM3u(source.subscriptionUrl, fetchOptions)
 
       const cur = this.relocateSource(source)
@@ -984,7 +1034,7 @@ class ExternalSourceManager {
       printGreen(`${source.name} 订阅更新成功，共 ${channels.length} 个频道`)
       return { success: true, channelCount: channels.length }
     } catch (error) {
-      const message = `${error.message}${subscriptionFailureHint(error, fetchOptions, source)}`
+      const message = `${viaProxy ? '经网络代理拉取失败：' : ''}${error.message}${subscriptionFailureHint(error, fetchOptions, source)}`
       printRed(`${source.name} 订阅更新失败: ${message}`)
 
       // 按 id 重新定位（await 期间快照 index 可能已失效）；源已被删则不记
@@ -1160,6 +1210,7 @@ class ExternalSourceManager {
             sourceId: source.id ? `ext:${source.id}` : undefined,  // 源归属（issue #29/#68）
             ...(builtInSubscription ? { builtInSubscription: true } : {}),
             ...(opts && opts.length ? { opts } : {}),
+            ...customPlaybackFields(source, ch.name, ch.url, ch.topFirst),
             ...sanitizeCatchup(ch)   // 源自带的回看声明（issue #190）；没有就不带，照旧继承订阅头
           })
         })
@@ -1181,6 +1232,7 @@ class ExternalSourceManager {
           logo: source.logo || "",
           groupTitle: source.group,
           sourceId: source.id ? `ext:${source.id}` : undefined,   // 源归属（issue #29/#68）
+          ...customPlaybackFields(source, source.name, source.m3u8Url, source.topFirst),
           // 复制来的副本保留原频道的回看声明（issue #190），地址改过就不再适用
           ...(source.catchupUrl && source.catchupUrl === source.m3u8Url ? sanitizeCatchup(source) : {})
         })
@@ -1188,6 +1240,22 @@ class ExternalSourceManager {
     })
     
     return Array.from(groupMap.values())
+  }
+
+  /**
+   * 经网络代理转发 / 最高画质起播改写过的频道（带 proxyRef），播放时按引用查原地址用。
+   * 直接取 getValidChannels 的结果，保证与写进订阅的那份一致（含「播放时也带上这个 UA」补的请求头）。
+   */
+  proxiedChannels() {
+    const names = new Map((this.sources.sources || []).filter(s => s && s.id).map(s => [`ext:${s.id}`, s.name]))
+    const out = []
+    for (const group of this.getValidChannels()) {
+      for (const ch of group.dataList) {
+        if (!ch.proxyRef) continue
+        out.push({ ref: ch.proxyRef, name: ch.name, url: ch.url, opts: ch.opts, useProxy: ch.useProxy, topFirst: ch.topFirst, sourceId: ch.sourceId, sourceName: names.get(ch.sourceId) || '' })
+      }
+    }
+    return out
   }
 
   /**
@@ -1258,4 +1326,4 @@ class ExternalSourceManager {
 const externalSourceManager = new ExternalSourceManager()
 
 export default externalSourceManager
-export { ExternalSourceManager, reseedBuiltInSubscriptions, fetchAndParseM3u, subscriptionFetchOptions, subscriptionFailureHint, SUBSCRIPTION_FETCH_LIMITS, parsePlaylistContent, decodeAndParseLocalContent, splitCredentials, isBuiltInSubscriptionSource, GITHUB_RAW_MIRRORS, BUILT_IN_SUBSCRIPTIONS, DEFAULT_CUSTOM_SUBSCRIPTIONS, ensureSourceIds, inheritExistingSourceIds }
+export { ExternalSourceManager, sourceUsesProxy, reseedBuiltInSubscriptions, fetchAndParseM3u, subscriptionFetchOptions, subscriptionFailureHint, SUBSCRIPTION_FETCH_LIMITS, parsePlaylistContent, decodeAndParseLocalContent, splitCredentials, isBuiltInSubscriptionSource, GITHUB_RAW_MIRRORS, BUILT_IN_SUBSCRIPTIONS, DEFAULT_CUSTOM_SUBSCRIPTIONS, ensureSourceIds, inheritExistingSourceIds }

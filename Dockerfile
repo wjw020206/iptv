@@ -1,6 +1,13 @@
-FROM node:22-alpine
+# 基础镜像锁到具体版本（当前 Node 22.23.4 / Alpine 3.24.4）。基础镜像一换，下面每一层都要重建，
+# 用户升级就得重下整个镜像（约 400 MB）；锁住后只在主动换的那一版整包下载。
+# 有新版时 bump-version.js 发版会提醒；换用 node bump-version.js update-base，并在更新日志写明这一版要整包下载。
+FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
 
 WORKDIR /iptv
+
+# 层的顺序按「多久变一次」从少到多排：系统包在前、npm 依赖其次、代码最后。
+# 每次发版 package.json 的版本号都会变，它之后的层必然重建；系统包放在它前面，
+# 配合构建流程里的层缓存（push_docker.yaml），Chromium、Python 这些大层发版时原样复用，用户升级不用重下。
 
 # 安装 tini 作为 init 进程（PID 1）。
 # Node 作为 PID 1 时不会回收被 Chromium 退出后重新挂到它名下的子进程，
@@ -20,27 +27,31 @@ RUN apk add --no-cache \
     ttf-freefont \
     || echo "Chromium not available on this architecture, web scraping will be disabled"
 
-# YouTube 只用公开 HLS。两个纯 Python 包配合镜像中的 Node 处理播放器 JS。
-COPY extractors/youtube-live/requirements.txt /tmp/youtube-requirements.txt
-RUN apk add --no-cache python3 py3-pip \
-  && python3 -m venv /opt/youtube \
-  && /opt/youtube/bin/pip install --no-cache-dir -r /tmp/youtube-requirements.txt \
-  && ln -s /opt/youtube/bin/yt-dlp /usr/local/bin/yt-dlp
-
 # 设置时区
 ENV TZ=Asia/Shanghai
 RUN apk add --no-cache tzdata \
   && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
   && echo $TZ > /etc/timezone
 
-# 系统软件与项目依赖分层：修改 package.json / 锁文件不重装 Chromium。
-# 先复制依赖清单、锁文件和 pnpm 配置，源码变化时复用依赖层。
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+# YouTube 只用公开 HLS。两个纯 Python 包配合镜像中的 Node 处理播放器 JS。
+# 不装 py3-pip：venv 的 pip 来自 python3 自带的 ensurepip，后台「检查更新」也只用 venv 里那份，系统再装一份白占约 4 MB。
+# 放在 Chromium 之后：升级 yt-dlp（改 requirements.txt）只重建这一层及之后，不牵动 Chromium。
+COPY extractors/youtube-live/requirements.txt /tmp/youtube-requirements.txt
+RUN apk add --no-cache python3 \
+  && python3 -m venv /opt/youtube \
+  && /opt/youtube/bin/pip install --no-cache-dir -r /tmp/youtube-requirements.txt \
+  && ln -s /opt/youtube/bin/yt-dlp /usr/local/bin/yt-dlp
+
+# Xumo 只在新增频道/更换入口时解码已通过网络代理下载的本地样本；播放不转码。
+RUN apk add --no-cache ffmpeg
 
 # 跳过 Puppeteer 自动下载 Chromium，使用系统的（更快更稳定）
 # 注意变量名是 PUPPETEER_SKIP_DOWNLOAD，不是 ..._SKIP_CHROMIUM_DOWNLOAD（后者 puppeteer 不认，是空操作）
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# 系统软件与项目依赖分层，代码变化时复用依赖层。
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 
 # Corepack 下载 pnpm 本身也使用阿里云 npmmirror；版本由 packageManager 锁定。
 ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import youtube from '../extractors/youtube-live/index.js'
-import { normalizeYouTubeInput, record, refOf, parseVideoChannel, parseBroadcasts, inspect, mediaUrl, parseLive, publicManifest, liveWindow, renewedLink, videoStatus, ytDlpError, unreachableMessage } from '../extractors/youtube-live/api.js'
+import { normalizeYouTubeInput, record, refOf, parseVideoChannel, parseVideo, parseBroadcasts, inspect, inspectEvent, mediaUrl, parseLive, liveInfo, publicManifest, liveWindow, renewedLink, videoStatus, ytDlpError, unreachableMessage } from '../extractors/youtube-live/api.js'
 import { topVariantFirst } from '../utils/hlsTopFirst.js'
 import { lookup, toProxyManifest } from '../utils/hlsProxy.js'
 import { ExtractorManager } from '../utils/extractorManager.js'
@@ -80,6 +80,33 @@ assert.equal(calls[1][1], 'https://www.youtube.com/channel/' + channelId + '/str
 await assert.rejects(inspect('https://youtu.be/' + id, { ...reads,
   readMetadata: async () => ({...fixture,channel_id:'UCaaaaaaaaaaaaaaaaaaaaaa'}) }), /频道身份/)
 
+// 订阅单场：新闻台同时开好几路，关注频道只播第一路，要能固定其中一场；只收在播 / 已预约的
+assert.deepEqual(parseVideo(page('OK',{isLive:true}),id),pinned)
+assert.deepEqual(parseVideo(page('LIVE_STREAM_OFFLINE'),id),pinned)
+for (const html of [page('LOGIN_REQUIRED'),page('OK',{videoId:'other-video',isLive:true}),page('OK',{isLiveContent:false}),page('OK',{}, {endTimestamp:'2026-11-03'})]) {
+  assert.throws(() => parseVideo(html,id))
+}
+const livePage = { readWatchPage: async () => page('OK',{isLive:true}) }
+assert.deepEqual(await inspectEvent('https://youtube.com/live/' + id + '?si=share', livePage), pinned)
+assert.notEqual(refOf(await inspectEvent('https://youtu.be/' + id, livePage)), refOf(channel), '固定场次和关注频道是两条订阅')
+await assert.rejects(inspectEvent('@ABCNews', livePage), /查看场次/)
+await assert.rejects(inspectEvent('https://youtu.be/' + id, { readWatchPage: async () => page('OK',{isLiveContent:false}) }), /正在直播或已预约/)
+// 「查看场次」粘的是单场链接：这一场排第一（不在频道直播页里的 unlisted 也列出来），不重复
+const unlisted = 'Unlisted001'
+const pastedReads = {
+  readWatchPage: async video => page('OK',{videoId:video,isLive:true,title:'Unlisted live'}),
+  readMetadata: async () => fixture,
+}
+const pastedList = await inspect('https://youtu.be/' + unlisted, pastedReads)
+assert.deepEqual(pastedList.events.map(e => [e.videoId, e.status]), [[unlisted,'is_live'], ...fixture.entries.map(e => [e.id, e.live_status])])
+assert.equal(pastedList.events[0].url, 'https://www.youtube.com/watch?v=' + unlisted)
+const listedAgain = await inspect('https://youtu.be/' + id, { ...pastedReads, readWatchPage: async () => page('OK',{isLive:true}) })
+assert.deepEqual(listedAgain.events.map(e => e.videoId), [id], '粘的场次本来就在列表里时不重复')
+const upcomingPasted = await inspect('https://youtu.be/' + unlisted, { ...pastedReads, readWatchPage: async video => page('LIVE_STREAM_OFFLINE',{videoId:video,isUpcoming:true}) })
+assert.equal(upcomingPasted.events[0].status, 'is_upcoming')
+const vodPasted = await inspect('https://youtu.be/' + unlisted, { ...pastedReads, readWatchPage: async video => page('OK',{videoId:video,isLiveContent:false}) })
+assert.ok(!vodPasted.events.some(e => e.videoId === unlisted), '普通视频只用来找频道，不列成场次')
+
 // 固定场次状态：后台据此标出已结束 / 失效、可以移除的
 assert.equal(videoStatus(page('OK',{isLive:true}),id),'live')
 assert.equal(videoStatus(page('LIVE_STREAM_OFFLINE',{isUpcoming:true}),id),'upcoming')
@@ -92,17 +119,67 @@ assert.equal(videoStatus('<html>consent</html>',id),'unknown')
 // yt-dlp 报错 → 给用户看的原因；连不上时指到「网络代理」
 assert.match(unreachableMessage(false),/网络代理.*填代理地址/)
 assert.match(unreachableMessage(true),/点「测试」/)
-assert.equal(ytDlpError('ERROR: [youtube] x: This live event will begin in 3 hours').message,'这场直播尚未开始或已经结束')
-assert.match(ytDlpError("ERROR: [youtube] x: Sign in to confirm you're not a bot").message,/人机验证/)
-assert.match(ytDlpError('ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests').message,/限制了这个出口/)
-assert.match(ytDlpError('ERROR: [youtube] x: Join this channel to get access to members-only content').message,/无法匿名播放/)
+assert.equal(ytDlpError('ERROR: [youtube] x: This live event will begin in 3 hours').reasonCode, 'NOT_LIVE')
+const botCheck = "ERROR: [youtube] x: Sign in to confirm you're not a bot"
+const tooMany = 'ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests'
+assert.match(ytDlpError(botCheck,{proxied:true}).message,/人机验证.*换一个代理节点/)
+assert.match(ytDlpError(botCheck,{proxied:false}).message,/这台机器的出口 IP 做人机验证.*网络代理」填一个代理/,'没配代理时不叫人换节点')
+assert.match(ytDlpError(tooMany,{proxied:true}).message,/限制了当前出口或访客会话.*换一个代理节点/)
+assert.match(ytDlpError(tooMany,{proxied:false}).message,/限制了当前出口或访客会话.*网络代理/)
+assert.ok(ytDlpError(botCheck).exitBlocked && ytDlpError(tooMany).exitBlocked,'人机验证与限流标为出口被拦，播放侧据此冷却')
+assert.ok(!ytDlpError('ERROR: [youtube] x: Some new extractor failure').exitBlocked)
+assert.match(ytDlpError('ERROR: [youtube] x: Join this channel to get access to members-only content').message,/需要会员权限.*普通登录不一定可用/)
 for (const net of ['ERROR: Unable to download webpage: <urlopen error [Errno 111] Connection refused>', 'ERROR: [youtube] x: Read timed out. (read timeout=12.0)',
   "ERROR: Unable to download API page: ('Cannot connect to proxy.', ConnectionResetError(54, 'Connection reset by peer'))", 'Tunnel connection failed: 502 Bad Gateway']) {
   assert.match(ytDlpError(net).message,/网络代理/,net)
 }
-assert.match(ytDlpError('',{killed:true}).message,/网络代理/,'30 秒没解析完按网络问题提示')
+assert.equal(ytDlpError('',{killed:true}).reasonCode,'PARSE_TIMEOUT','进程超时不能直接断言网络不通')
 assert.match(ytDlpError('ERROR: [youtube] x: Some new extractor failure').message,/检查更新/,'看不懂的失败提示更新解析组件')
 assert.match(ytDlpError('',{code:'ENOENT'}).message,/缺少 yt-dlp/)
+
+const reasons = [
+  ["Sign in to confirm you're not a bot", 'BOT_CHECK', /出口被拦/],
+  ['Sign in to confirm you’re not a bot', 'BOT_CHECK', /人机验证/],
+  ['Sign in to confirm you are not a bot', 'BOT_CHECK', /人机验证/],
+  ['YouTube is requiring a captcha challenge before playback', 'BOT_CHECK', /人机验证/],
+  ['HTTP Error 429: Too Many Requests', 'RATE_LIMITED', /请求受限/],
+  ["This content isn't available, try again later. The current session has been rate-limited", 'RATE_LIMITED', /请求受限/],
+  ['Sign in to confirm your age', 'LOGIN_REQUIRED', /年龄验证.*浏览器登录不会同步/],
+  ['This video is age-restricted', 'LOGIN_REQUIRED', /年龄验证/],
+  ['Join this channel to get access to members-only content', 'MEMBERS_ONLY', /需要会员权限/],
+  ['Private video. Sign in if you have been granted access', 'PRIVATE_VIDEO', /仅获授权的账号/],
+  ['Sign in to watch this video', 'LOGIN_REQUIRED', /需要登录.*仅支持匿名公开直播/],
+  ['The uploader has not made this video available in your country', 'GEO_RESTRICTED', /地区限制/],
+  ['This video is not available in your country', 'GEO_RESTRICTED', /地区限制/],
+  ['This live event will begin in 3 hours', 'NOT_LIVE', /未开播/],
+  ['This live stream has ended', 'LIVE_ENDED', /直播已结束/],
+  ['HTTP Error 403: Forbidden', 'UPSTREAM_REJECTED', /不能仅凭此错误判断需要登录/],
+  ['Connection refused', 'NETWORK_UNREACHABLE', /网络不通/],
+  ['Something new went wrong', 'EXTRACTION_FAILED', /尚未确定原因/],
+]
+for (const [reason, reasonCode, message] of reasons) {
+  const error = ytDlpError('ERROR: [youtube] x: ' + reason)
+  assert.equal(error.reasonCode, reasonCode, reason)
+  assert.match(error.message, message)
+  assert.equal(Boolean(error.exitBlocked), ['BOT_CHECK','RATE_LIMITED'].includes(reasonCode), reason)
+}
+assert.match(ytDlpError('Connection refused', { proxied:true }).message, /经代理.*点「测试」/)
+assert.match(ytDlpError('Connection refused', { proxied:false }).message, /填代理地址/)
+assert.equal(ytDlpError("WARNING: Sign in to confirm you're not a bot\nERROR: Sign in to confirm your age").reasonCode, 'LOGIN_REQUIRED', '其他客户端的警告不能覆盖最终错误')
+assert.equal(ytDlpError('WARNING: Skipping formats that may yield HTTP Error 403\nERROR: Connection refused').reasonCode, 'NETWORK_UNREACHABLE')
+assert.doesNotMatch(ytDlpError('ERROR: HTTP Error 403 https://manifest.googlevideo.com/secret?sig=private').message, /secret|sig=|https:/)
+
+// 网页播放器返回的原因也参与同一分类；只给 LOGIN_REQUIRED 时不能猜是账号还是人机验证。
+const deniedPage = playabilityStatus => '<script>var ytInitialPlayerResponse = ' + JSON.stringify({ playabilityStatus }) + ';</script>'
+for (const [reason, reasonCode] of reasons.slice(0, 13)) {
+  const html = deniedPage({ status:'LOGIN_REQUIRED', reason })
+  assert.throws(() => parseVideo(html, id), err => err.reasonCode === reasonCode)
+  assert.throws(() => parseVideoChannel(html, id), err => err.reasonCode === reasonCode)
+  assert.equal(videoStatus(html, id), 'unknown', '权限/出口限制不能标为已失效并建议移除')
+}
+assert.throws(() => parseVideo(deniedPage({status:'LOGIN_REQUIRED'}), id), err => err.reasonCode === 'ACCESS_RESTRICTED')
+assert.throws(() => parseVideo(deniedPage({status:'UNPLAYABLE', errorScreen:{playerErrorMessageRenderer:{subreason:{runs:[{text:'Join this channel'},{text:' to get access'}]}}}}), id), err => err.reasonCode === 'MEMBERS_ONLY')
+assert.throws(() => parseVideo(deniedPage({status:'LOGIN_REQUIRED', reason:'Sign in', errorScreen:{playerCaptchaViewModel:{}}}), id), err => err.reasonCode === 'BOT_CHECK')
 
 // 最高画质上限：只在不超过它的档里取最高；一档都不满足时取最低的视频档；竖屏按短边算
 const ladder = ['#EXTM3U','#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="a.m3u8"',
@@ -129,7 +206,46 @@ assert.equal(parseLive({ ...data, formats: [
   { ...format, width:640, height:360 }, { ...format, width:1920, height:1080, manifest_url:highMaster },
   { ...format, width:3840, height:2160, manifest_url:master.replace(String(expiry), '1') },
 ] }, channel, id).url, highMaster)
+// 同画质优先音视频合在一起的那份（mweb 的 91～96），哪怕码率略低；更高画质仍优先
+const muxedMaster = master.replace('index.m3u8','muxed/index.m3u8')
+assert.equal(parseLive({ ...data, formats: [
+  { ...format, width:1920, height:1080, acodec:'none', tbr:5000 }, { ...format, width:1920, height:1080, acodec:'mp4a.40.2', tbr:4500, manifest_url:muxedMaster },
+] }, channel, id).url, muxedMaster)
+assert.equal(parseLive({ ...data, formats: [
+  { ...format, width:1280, height:720, acodec:'mp4a.40.2', manifest_url:muxedMaster }, { ...format, width:1920, height:1080, acodec:'none', manifest_url:highMaster },
+] }, channel, id).url, highMaster)
+// 默认只用 yt-dlp 默认客户端；打开「音视频合流」才先试 mweb，失败或没有 HLS 再退回默认客户端；
+// 没开播 / 出口被拦 / 连不上不再多跑一轮
+const liveReads = []
+const liveReader = (...results) => async (url, args) => {
+  liveReads.push(args.join(' '))
+  const next = results.shift()
+  if (next instanceof Error) throw next
+  return next
+}
+const MWEB = '--no-playlist --extractor-args youtube:player_client=mweb'
+const muxedData = { ...data, formats: [{ ...format, width:1920, height:1080, acodec:'mp4a.40.2', manifest_url:muxedMaster }] }
+assert.equal((await liveInfo(channel, id, {}, liveReader(data))).url, master)
+assert.deepEqual(liveReads, ['--no-playlist'], '默认不开合流：只解析一次、不带 mweb')
+liveReads.length = 0
+assert.equal((await liveInfo(channel, id, { muxed:true }, liveReader(muxedData))).url, muxedMaster)
+assert.deepEqual(liveReads, [MWEB])
+for (const first of [ytDlpError('ERROR: [youtube] x: No video formats found!'), { ...data, formats: [] }]) {
+  liveReads.length = 0
+  assert.equal((await liveInfo(channel, id, { muxed:true }, liveReader(first, data))).url, master)
+  assert.deepEqual(liveReads, [MWEB, '--no-playlist'])
+}
+for (const stop of [ytDlpError('ERROR: [youtube] x: This live event will begin in 3 hours'), ytDlpError(botCheck), ytDlpError('Tunnel connection failed: 502 Bad Gateway'),
+  ytDlpError('Sign in to confirm your age'), ytDlpError('Join this channel'), ytDlpError('not available in your country'), ytDlpError('', { killed:true }),
+  { ...data, live_status:'was_live' }, { ...data, availability:'subscriber_only' }]) {
+  liveReads.length = 0
+  await assert.rejects(liveInfo(channel, id, { muxed:true }, liveReader(stop, data)))
+  assert.equal(liveReads.length, 1)
+}
+const muxedField = youtube.configSchema.find(f => f.key === 'muxedAudio')
+assert.ok(muxedField && muxedField.type === 'boolean' && muxedField.default === false, '合流开关默认关')
 const live = parseLive(data,channel,id)
+assert.throws(() => parseLive({...data, live_status:undefined}, channel, id), error => error.reasonCode === 'EXTRACTION_FAILED', '缺少直播状态不能误报未开播')
 assert.deepEqual(live.upstreamHeaders(master), {'User-Agent':'player'})
 for (const bad of ['https://localhost/','http://manifest.googlevideo.com/test','https://manifest.googlevideo.com.evil.test/x']) {
   assert.throws(() => live.upstreamHeaders(bad))
@@ -187,4 +303,46 @@ try {
   assert.ok(!manager().getValidChannels().some(g=>g.name===youtube.name))
   assert.equal((await youtube.resolve(refOf(channel),{config:{}})).status,404)
 } finally { rmSync(dir,{recursive:true,force:true}) }
+
+// 出口被人机验证：1 分钟内不再跑 yt-dlp；并发请求共用的同一次失败和冷却期内的重试只记一行
+const fakeDir = mkdtempSync(join(tmpdir(),'iptv-youtube-bot-'))
+const runs = join(fakeDir,'runs')
+const fakeBin = join(fakeDir,'yt-dlp')
+writeFileSync(fakeBin, `#!/bin/sh\necho run >> "${runs}"\necho "${botCheck}" >&2\nexit 1\n`, { mode:0o755 })
+const ytDlpRuns = () => { try { return readFileSync(runs,'utf8').split('\n').filter(Boolean).length } catch { return 0 } }
+const savedBin = process.env.YTDLP_BIN, realNow = Date.now
+process.env.YTDLP_BIN = fakeBin
+try {
+  youtube.clearResolveCache()
+  const config = { subscriptions: JSON.stringify([pinned]) }
+  const play = () => youtube.resolve(refOf(pinned), { config })
+  const burst = await Promise.all([play(), play()])
+  assert.equal(ytDlpRuns(), 1)
+  assert.deepEqual(burst.map(r => r.status), [502, 502])
+  assert.equal(burst.filter(r => !r.silent).length, 1, '同一次失败只打一行红字')
+  assert.match(burst.find(r => !r.silent).desc, /人机验证.*已暂停向 YouTube 请求 1 分钟/)
+  const again = await play()
+  assert.ok(again.silent && ytDlpRuns() === 1, '2 秒内复用同一次失败，也不再记')
+  Date.now = () => realNow() + 3000
+  const retry = await play()
+  assert.equal(retry.reasonCode, 'BOT_CHECK', '冷却期保留原因分类')
+  assert.equal(ytDlpRuns(), 1, '冷却期内的重试不跑 yt-dlp')
+  assert.ok(retry.silent)
+  assert.match(retry.desc, /人机验证.*约 \d+ 秒后再试）$/)
+  assert.ok(!/1 分钟）.*1 分钟）/.test(retry.desc), '冷却说明不重复叠加')
+  Date.now = () => realNow() + 61000
+  const later = await play()
+  assert.equal(ytDlpRuns(), 2, '冷却过后重新解析')
+  assert.ok(!later.silent, '冷却过后再失败重新记一行')
+  Date.now = realNow
+  youtube.clearResolveCache()
+  await play()
+  assert.equal(ytDlpRuns(), 3, '保存配置等清缓存时一并解除冷却')
+} finally {
+  Date.now = realNow
+  if (savedBin === undefined) delete process.env.YTDLP_BIN
+  else process.env.YTDLP_BIN = savedBin
+  youtube.clearResolveCache()
+  rmSync(fakeDir,{recursive:true,force:true})
+}
 console.log('✅ YouTube 订阅、当前场次、配置持久化、HLS 换签及原始字幕')

@@ -59,22 +59,26 @@ const segment = (sig, { itag = '232', language = 'en', sq = '42', id = video } =
   `https://rr3---sn-test.googlevideo.com/videoplayback/expire/${expiry}/id/${id}.1/itag/${itag}/xtags/${language}/sq/${sq}/sig/${sig}/seg.ts`
 const field = (raw, name) => new URL(raw).pathname.split('/' + name + '/')[1]?.split('/')[0]
 async function playback() {
-  const state = { parses: 0, requests: [], revoked: false, status: 403, failAt: 'media', newVideo: video, missingSq: false, gate: null }
+  const state = { parses: 0, args: [], requests: [], revoked: false, status: 403, failAt: 'media', newVideo: video, missingSq: false, gate: null }
   const api = await load('extractors/youtube-live/api.js', {
     'node:child_process': subprocess(async (_binary, args) => {
       state.parses++
+      state.args.push(args.join(' '))
+      if (state.stderr) throw { stderr: state.stderr }
       assert.equal(args.at(-1), 'https://www.youtube.com/watch?v=' + video, 'renew the original programme')
-      return { stdout: JSON.stringify({ id: video, channel_id: channelId, live_status: 'is_live',
+      return { stdout: JSON.stringify({ id: video, channel_id: channelId, live_status: state.liveStatus || 'is_live',
         formats: [{ protocol: 'm3u8_native', vcodec: 'avc1', manifest_url: master(state.parses === 1 ? 'A' : 'B') }] }) }
     }),
     'node:crypto': crypto, 'node:util': util,
-    './runtime.js': { ytDlpBinary: () => '/mock/yt-dlp' },
+    './runtime.js': { ytDlpCommand: () => ({ file: '/mock/yt-dlp', args: [] }) },
     '../../utils/replaceToken.js': { hasReplaceToken }, '../../utils/hlsTopFirst.js': { topVariantFirst },
     '../../utils/hlsProxy.js': { fetchUpstreamResponse },
     '../../utils/outboundProxy.js': {
       outboundProxyKey: () => 'direct', outboundProxyUrl: () => '', ytDlpProxyArg: () => '',
       outboundFetch: async (raw, options) => {
         state.requests.push({ raw, options })
+        if (state.networkError) throw Object.assign(new Error('fetch failed'), { cause: { code:'ECONNREFUSED' } })
+        if (raw.startsWith('https://www.youtube.com/')) return new Response('upstream error', { status:state.watchStatus || 403 })
         const sig = field(raw, 'sig')
         const isMaster = raw.includes('/hls_variant/')
         if (state.gate && sig === 'A' && isMaster) {
@@ -155,15 +159,79 @@ await check('a changed broadcast or missing segment never switches programme or 
   }
 })
 
+await check('the muxed-audio setting reaches yt-dlp on open and on renewal; default stays on the default clients', async () => {
+  const h = await playback()
+  assert.ok(!h.state.args.some(a => a.includes('player_client')), 'default: no mweb')
+  const muxedConfig = { ...h.config, muxedAudio: true }
+  const ref = h.api.refOf(h.item)
+  const opened = await h.api.resolve(ref, { config: muxedConfig })
+  assert.ok(opened.url, opened.desc)
+  assert.match(h.state.args.at(-1), /player_client=mweb/)
+  const parses = h.state.parses
+  h.state.revoked = true
+  const res = await h.api.fetchProxyMedia(ref, muxedConfig, track('A'), {})
+  assert.equal(res.status, 200)
+  assert.ok(h.state.parses > parses)
+  assert.match(h.state.args.at(-1), /player_client=mweb/, 'renewal keeps the muxed client')
+})
+
+await check('manual playback checks surface the cause and never return signed media URLs', async () => {
+  for (const [changes, code, hint] of [
+    [{ stderr:'ERROR: Connection refused' }, 'NETWORK_UNREACHABLE', /网络不通/],
+    [{ stderr:"ERROR: Sign in to confirm you're not a bot" }, 'BOT_CHECK', /出口被拦/],
+    [{ stderr:'ERROR: HTTP Error 429: Too Many Requests' }, 'RATE_LIMITED', /请求受限/],
+    [{ stderr:'ERROR: Sign in to confirm your age' }, 'LOGIN_REQUIRED', /需要登录/],
+    [{ stderr:'ERROR: members-only content' }, 'MEMBERS_ONLY', /会员权限/],
+    [{ liveStatus:'is_upcoming' }, 'NOT_LIVE', /未开播/],
+    [{ liveStatus:'was_live' }, 'LIVE_ENDED', /已结束/],
+    [{ networkError:true }, 'NETWORK_UNREACHABLE', /Google Video 视频服务器/],
+    [{ revoked:true, failAt:'all' }, 'UPSTREAM_REJECTED', /HTTP 403.*不能仅凭此错误判断需要登录/],
+  ]) {
+    const h = await playback()
+    Object.assign(h.state, changes)
+    const result = await h.api.checkPlayback(h.api.refOf(h.item), h.config)
+    assert.equal(result.success, false)
+    assert.equal(result.reasonCode, code)
+    assert.match(result.message, hint)
+    assert.doesNotMatch(JSON.stringify(result), /https:|\/sig\/|manifestUrl/)
+    const resolved = await h.api.resolve(h.api.refOf(h.item), { config:h.config })
+    assert.equal(resolved.status, ['NOT_LIVE','LIVE_ENDED'].includes(code) ? 503 : 502)
+    assert.match(resolved.desc, hint, '网页播放入口收到相同中文原因')
+  }
+  const h = await playback()
+  const success = await h.api.checkPlayback(h.api.refOf(h.item), h.config)
+  assert.equal(success.success, true)
+  assert.match(success.message, /入口可访问.*不包含音视频分片/)
+  assert.doesNotMatch(JSON.stringify(success), /https:|\/sig\/|manifestUrl/)
+})
+
+await check('watch-page network and HTTP failures use the same classifications', async () => {
+  for (const [changes, code] of [[{networkError:true},'NETWORK_UNREACHABLE'], [{watchStatus:429},'RATE_LIMITED'], [{watchStatus:403},'UPSTREAM_REJECTED']]) {
+    const h = await playback()
+    Object.assign(h.state, changes)
+    await assert.rejects(h.api.inspectEvent('https://www.youtube.com/watch?v=' + video), error => error.reasonCode === code)
+  }
+})
+
+const harnesses = []
 async function runtime(state = {}) {
-  Object.assign(state, { version: state.version || '2026.10.21', ejs: state.ejs ?? '0.8.0', installs: [], fail: state.fail || '', updated:0 })
+  harnesses.push(state)
+  Object.assign(state, { version: state.version || '2026.10.21', ejs: state.ejs ?? '0.8.0', installs: [], installArgs: [], fail: state.fail || '', updated:0 })
   const required = () => state.version === '2026.10.21' ? '0.8.0' : '0.9.0'
   const api = await load('extractors/youtube-live/runtime.js', {
-    'node:child_process': subprocess(async (_binary, args) => {
-      if (args.includes('--version')) return {stdout:state.version}
+    'node:child_process': subprocess(async (binary, args) => {
+      if (args.includes('--version')) {
+        // 本项目的虚拟环境不走 bin/yt-dlp 启动脚本（挪过目录就失效），用其中的 python -m yt_dlp
+        // 状态读取会吞掉这里的异常（当成读不到版本），断言失败记下来，由各用例结尾统一检查
+        if (!/\/\.runtime\/youtube\/bin\/python$/.test(binary) || args.slice(0, 2).join(' ') !== '-m yt_dlp') state.wrongCommand = `${binary} ${args.join(' ')}`
+        if (state.slow) throw Object.assign(new Error('killed'), {killed:true, signal:'SIGTERM'})
+        if (state.broken) throw Object.assign(new Error('exit 1'), {code:1, stderr:'No module named yt_dlp'})
+        return {stdout:state.version}
+      }
       if (args.includes('-c')) return {stdout:JSON.stringify({requirement:'yt-dlp-ejs==' + required(), version:state.ejs, healthy:state.ejs === required()})}
       assert.ok(args.includes('install'))
-      const name = args.at(-1); state.installs.push(name)
+      const name = args.at(-1); state.installs.push(name); state.installArgs.push(args)
+      if (name.startsWith('yt-dlp==') && !state.fail) state.broken = false
       if (state.gate) { const gate=state.gate; state.gate=null; gate.entered.resolve(); await gate.release.promise }
       if (state.fail === 'core' || (state.fail === 'ejs' && name.startsWith('yt-dlp-ejs'))) {
         throw Object.assign(new Error('install failed'), {stderr:'ConnectionError: timed out'})
@@ -224,20 +292,53 @@ await check('successful installer exit alone is insufficient; verify dependencie
   assert.equal((await h.update()).updated, false)
   assert.equal(h.state.installs.length, count, 'healthy current versions need no installation')
 })
-await check('admin offers repair after reopening and keeps retry available after failure', async () => {
+await check('unrunnable yt-dlp in our own environment is offered as a repair and force-reinstalled', async () => {
+  const h = await runtime({version:'2026.10.26',ejs:'0.9.0',broken:true})
+  const status = await h.api.runtimeStatus({checkLatest:true})
+  assert.equal(status.version, ''); assert.equal(status.managed, true)
+  assert.equal(status.repairNeeded, true); assert.equal(status.outdated, false)
+  const result = await h.update()
+  assert.equal(result.version, '2026.10.26'); assert.equal(result.repaired, true); assert.equal(result.updated, false)
+  assert.deepEqual(h.state.installs, ['yt-dlp==2026.10.26'])
+  assert.ok(h.state.installArgs[0].includes('--force-reinstall'), 'same version: plain --upgrade would be a no-op')
+  assert.equal((await h.api.runtimeStatus()).repairNeeded, false)
+  assert.equal(h.state.updated, 1)
+})
+await check('a version read that times out is reported, not offered as a reinstall', async () => {
+  const h = await runtime({version:'2026.10.26',ejs:'0.9.0',slow:true})
+  await assert.rejects(h.api.runtimeStatus(), /超时/)
+  h.state.slow = false
+  assert.equal((await h.api.runtimeStatus()).version, '2026.10.26')
+})
+await check('our own environment always runs yt-dlp as python -m yt_dlp, never the launcher script', async () => {
+  assert.ok(harnesses.length >= 5)
+  for (const state of harnesses) assert.equal(state.wrongCommand, undefined)
+})
+async function adminRuntime(extractorPost) {
   const admin = readFileSync(new URL('web/admin.html', root), 'utf8')
   const source = admin.match(/^ {8}function initYouTubeSubscriptions\([^]*?^ {8}\}/m)[0]
   const elements = Object.fromEntries(['youtubeInput','youtubeEvents','youtubeInspect','youtubeAdd',
     'youtubeRuntimeText','youtubeRuntimeCheck','youtubeRuntimeUpdate'].map(id => [id, {isConnected:true,hidden:true}]))
-  let fail = true
-  const context = vm.createContext({
-    document: {getElementById:id=>elements[id],querySelectorAll:()=>[]},
-    extractorPost: async ({op}) => op === 'update'
-      ? fail ? {success:false,message:'下载超时'} : {success:true,version:'2026.10.26',updated:false,repaired:true}
-      : {success:true,version:'2026.10.26',managed:true,repairNeeded:true,latest:'2026.10.26',outdated:false},
-  })
+  const context = vm.createContext({ document: {getElementById:id=>elements[id],querySelectorAll:()=>[]}, extractorPost })
   vm.runInContext(source + '\ninitYouTubeSubscriptions()', context)
   await new Promise(setImmediate)
+  return elements
+}
+await check('admin never calls an unreadable yt-dlp up to date', async () => {
+  const broken = await adminRuntime(async () => ({success:true,version:'',managed:true,repairNeeded:true,latest:'2026.10.26',outdated:false}))
+  await broken.youtubeRuntimeCheck.onclick()
+  assert.equal(broken.youtubeRuntimeText.textContent, '解析组件 yt-dlp 无法运行，请点「修复」重新安装')
+  assert.equal(broken.youtubeRuntimeUpdate.hidden, false); assert.equal(broken.youtubeRuntimeUpdate.textContent, '修复')
+  const missing = await adminRuntime(async () => ({success:true,version:'',managed:false,reason:'没装 yt-dlp',latest:'2026.10.26',outdated:false}))
+  await missing.youtubeRuntimeCheck.onclick()
+  assert.equal(missing.youtubeRuntimeText.textContent, '解析组件 yt-dlp：未安装。没装 yt-dlp')
+  assert.equal(missing.youtubeRuntimeUpdate.hidden, true)
+})
+await check('admin offers repair after reopening and keeps retry available after failure', async () => {
+  let fail = true
+  const elements = await adminRuntime(async ({op}) => op === 'update'
+    ? fail ? {success:false,message:'下载超时'} : {success:true,version:'2026.10.26',updated:false,repaired:true}
+    : {success:true,version:'2026.10.26',managed:true,repairNeeded:true,latest:'2026.10.26',outdated:false})
   const button = elements.youtubeRuntimeUpdate
   assert.equal(button.hidden, false); assert.equal(button.textContent, '修复依赖')
   await elements.youtubeRuntimeCheck.onclick()
@@ -250,5 +351,63 @@ await check('admin offers repair after reopening and keeps retry available after
   await button.onclick()
   assert.equal(button.hidden, true)
   assert.match(elements.youtubeRuntimeText.textContent, /已修复/)
+})
+await check('admin lists every event with its own 订阅此场 that pins that event, not the channel', async () => {
+  const admin = readFileSync(new URL('web/admin.html', root), 'utf8')
+  const source = admin.match(/^ {8}function initYouTubeSubscriptions\([^]*?^ {8}\}/m)[0]
+  const node = () => ({ children: [], textContent: '', isConnected: true, hidden: true,
+    append(...items) { for (const item of items) typeof item === 'string' ? this.textContent += item : this.children.push(item) },
+    replaceChildren() { this.children = []; this.textContent = '' } })
+  const elements = Object.fromEntries(['youtubeInput','youtubeEvents','youtubeInspect','youtubeAdd',
+    'youtubeRuntimeText','youtubeRuntimeCheck','youtubeRuntimeUpdate'].map(id => [id, node()]))
+  elements.youtubeInput.value = 'https://www.youtube.com/@SkyNews'
+  elements.youtubeInput.closest = () => ({ querySelectorAll: () => [] })
+  const posts = [], applied = []
+  const checkButton = { ...node(), dataset:{youtubeCheck:channelId} }
+  const feedback = node()
+  checkButton.parentElement = { querySelector: () => feedback }
+  const checking = deferred()
+  let checkResult = { success:false, reasonCode:'BOT_CHECK', message:'出口被拦：请检查网络出口' }
+  elements.youtubeInput.closest = () => ({ querySelectorAll: () => [checkButton] })
+  const live = (videoId, name, status = 'is_live') => ({ channelId: 'UCoMdktPbSTixAyNGwb-UYkQ', videoId, name, status, url: 'https://www.youtube.com/watch?v=' + videoId })
+  const extractorPost = async body => {
+    posts.push(body)
+    if (body.action === 'youtubeRuntime') return { success: true, version: '2026.10.26', managed: true }
+    if (body.action === 'youtubeCheck') { await checking.promise; return checkResult }
+    if (body.action === 'youtubeInspect') return { success: true, item: { channelId: 'UCoMdktPbSTixAyNGwb-UYkQ', name: 'Sky News' },
+      events: [live('aaaaaaaaaaa', 'Sky News Live'), live('bbbbbbbbbbb', 'Sky News Ukraine'), live('ccccccccccc', 'Press conference', 'is_upcoming')] }
+    return { success: true }
+  }
+  const context = vm.createContext({ document: { getElementById: id => elements[id], querySelectorAll: selector => selector === '[data-youtube-check]' ? [checkButton] : [], createElement: node },
+    extractorPost, applyExtractorResult: (result, message) => applied.push(message) })
+  vm.runInContext(source + '\ninitYouTubeSubscriptions()', context)
+  await new Promise(setImmediate)
+  await elements.youtubeInspect.onclick()
+  const [heading, ...rows] = elements.youtubeEvents.children
+  assert.equal(heading.children[0].textContent, '关注此频道')
+  assert.deepEqual(rows.map(row => row.textContent), ['直播中 · Sky News Live ', '直播中 · Sky News Ukraine ', '已预约 · Press conference '])
+  assert.ok(rows.every(row => row.children[0].textContent === '订阅此场'))
+  await rows[1].children[0].onclick()
+  assert.deepEqual({ ...posts.at(-1) }, { action: 'youtubeAdd', url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb', pin: true })
+  assert.match(applied.at(-1), /已订阅这一场/)
+  await heading.children[0].onclick()
+  assert.deepEqual({ ...posts.at(-1) }, { action: 'youtubeAdd', url: 'https://www.youtube.com/channel/UCoMdktPbSTixAyNGwb-UYkQ' })
+  assert.match(applied.at(-1), /已关注频道/)
+  await elements.youtubeAdd.onclick()
+  assert.deepEqual({ ...posts.at(-1) }, { action: 'youtubeAdd', url: 'https://www.youtube.com/@SkyNews' }, '主按钮照旧关注频道')
+  const before = applied.length
+  const pending = checkButton.onclick()
+  assert.equal(checkButton.disabled, true)
+  assert.match(feedback.textContent, /从部署机器检查/)
+  await checkButton.onclick()
+  assert.equal(posts.filter(p => p.action === 'youtubeCheck').length, 1, '重复点击不发起并发检查')
+  checking.resolve(); await pending
+  assert.deepEqual({ ...posts.at(-1) }, { action:'youtubeCheck', ref:channelId })
+  assert.equal(feedback.textContent, checkResult.message, '失败原因就地显示在对应频道下方')
+  assert.equal(checkButton.disabled, false)
+  checkResult = { success:true, message:'当前直播的播放入口可访问' }
+  await checkButton.onclick()
+  assert.equal(feedback.textContent, checkResult.message)
+  assert.equal(applied.length, before, '只读检查不刷新或覆盖订阅配置')
 })
 console.log(`YouTube recovery: ${passed} checks passed`)

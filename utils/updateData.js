@@ -9,6 +9,7 @@ import { ensureLogoIndex, resolveLibraryLogo } from "./logoLibrary.js"
 import { renderOpts, needsOpts } from "./channelOpts.js"
 import { renderCatchupAttrs } from "./channelCatchup.js"
 import { hasReplaceToken } from "./replaceToken.js"
+import { catchupForProxyEntry, claimsRef as claimsCustomProxyRef } from "./customSourceProxy.js"
 import { refreshToken as enableTokenRefresh, host, pass, enableMigu, externalLogoBase, enableLogoCache } from "../config.js"
 import { finishLogoCache, hostedLogoUrl, prefetchLogos } from "./logoCache.js"
 import { packLogoUrl } from "./logoPack.js"
@@ -442,6 +443,10 @@ async function updateTV(hours, options = {}) {
           : channelItem.relayHls === true
             ? `\${replace}/relay/${channelItem.deferredRef}.m3u8`
             : `\${replace}/${channelItem.deferredRef}`
+      } else if (isExternal && claimsCustomProxyRef(channelItem.proxyRef)) {
+        // 最高画质入口默认只转发主清单；是否全转发由解析器按源的 useProxy 开关决定。
+        // 仅开网络代理的源沿用 /proxy/ 入口。频道身份仍按原地址算，见下方 identity-url。
+        playUrl = `\${replace}/${channelItem.topFirst ? 'relay' : 'proxy'}/${channelItem.proxyRef}.m3u8`
       } else if (isExternal || isExtractor) {
         playUrl = channelItem.url      // 外部源 / 抓取模块使用url
       } else {
@@ -490,8 +495,12 @@ async function updateTV(hours, options = {}) {
       const sourceAttr = allSourceIds.length ? ` source-ids="${allSourceIds.join(';')}"` : ''
       // 模块从直链迁到代理时可保留旧地址作为身份依据，避免旧隐藏/改名/排序失配。
       // URI 编码只用于内部属性，不影响真正的播放 URL，也不允许属性注入。
-      const identityAttr = isExtractor && channelItem.identityUrl
-        ? ` identity-url="${encodeURIComponent(channelItem.identityUrl)}"` : ''
+      // 自定义源改写成本机入口的频道同理：身份留在原地址上，开关一开一关用户的编排都不丢
+      const identityUrl = isExtractor
+        ? channelItem.identityUrl
+        : (isExternal && claimsCustomProxyRef(channelItem.proxyRef) ? channelItem.url : '')
+      const identityAttr = identityUrl
+        ? ` identity-url="${encodeURIComponent(identityUrl)}"` : ''
 
       // 频道级播放选项：防盗链源要靠 #EXTVLCOPT 把 Referer 等带给播放器，
       // 必须夹在 EXTINF 和播放地址之间。无 opts 时为空串，输出与之前逐字节一致。
@@ -500,7 +509,10 @@ async function updateTV(hours, options = {}) {
       // 写入节目
       // 频道级回看声明：模块的 catchup:'none'（issue #119）与第三方订阅自带的模板 / 天数（issue #190），
       // 行内覆盖订阅头的咪咕模板。没有声明时为空串，输出与之前逐字节一致。
-      const catchupAttr = renderCatchupAttrs(channelItem)
+      // 改写成本机入口的自定义源频道：入口不带 ?，& 开头的回看模板要改成 ? 开头
+      const catchupAttr = renderCatchupAttrs(isExternal && claimsCustomProxyRef(channelItem.proxyRef)
+        ? catchupForProxyEntry(channelItem)
+        : channelItem)
       appendFileSync(interfacePath, `#EXTINF:-1 tvg-id="${channelItem.name}" tvg-name="${channelItem.name}" tvg-logo="${logoUrl}"${sourceAttr}${identityAttr}${catchupAttr} group-title="${datas[i].name}",${channelItem.name}\n${optLines}${playUrl}\n`)
       writtenChannels++
       // txt：diyp/TVBox 格式只有「频道名,地址」两列，放不下请求头，依赖请求头的
