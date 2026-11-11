@@ -4840,7 +4840,7 @@
                         <div style="font-weight:600; color:#333; margin-bottom:4px;">怎么用</div>
                         <div>① 点「＋ 新增用户」，给每个人起个名（如「客厅电视」「老王」）；</div>
                         <div>② 用每行的「复制 m3u」把各自的源地址发给对应的人；</div>
-                        <div>③ 谁的链接泄露 / 不想给了 → 关掉那一行的开关（或「重置令牌」），<strong>只影响他一个</strong>，其他人照常。</div>
+                        <div>③ 每行底部「访问来源」列出用过这条链接的 IP 和播放器；冒出不认识的，或者不想给了 → 关掉那一行的开关（或「重置令牌」），<strong>只影响这一个人</strong>，其他人照常。</div>
                         <div style="font-weight:600; color:#333; margin:8px 0 4px;">注意</div>
                         <div>• 这是「<strong>可追溯 + 可单独吊销</strong>」，不是「漏了也用不了」——发现异常停掉即可；</div>
                         <div>• 你自己的<strong>站长密码不要外发</strong>（它能进后台）；发出去的只该是 <code>/u/&lt;令牌&gt;/…</code>；</div>
@@ -4991,7 +4991,7 @@
                                 <strong>当前版本</strong>
                             </div>
                             <div class="about-version-body">
-                                <span id="versionText">v4.70.0</span>
+                                <span id="versionText">v4.71.0</span>
                                 <button class="btn btn-sm" onclick="checkUpdate()" id="checkUpdateBtn">检查更新</button>
                             </div>
                             <div id="updateInfo" class="about-update-info" style="display: none;"></div>
@@ -5751,6 +5751,21 @@
             return `<span style="color:${color};">● ${escapeHtml(text)}</span>`;
         }
 
+        /**
+         * 视频经服务器转发的模块在卡片底部标「占上行」（服务端 extractorManager 的 mediaForwardingOf，只读缓存）。
+         * 放底部那行、跟「N 频道」同样的浅灰字，不放标题行：三列布局下标题行再多一个角标，
+         * 「凤凰卫视」「北京广播电视台」就被挤成省略号。/relay/、直链和 302 的模块不标。
+         */
+        function extractorUplinkNote(m) {
+            const f = m.mediaForwarding || {};
+            if (f.kind !== 'all' && f.kind !== 'some') return '';
+            const effect = '外网观看时占服务器所在网络（如家里宽带）的上行带宽，每多一位观众多占一份；局域网内观看不受影响';
+            const title = f.kind === 'all'
+                ? `视频经服务器转发：${effect}`
+                : `${f.total} 个频道里有 ${f.forwarded} 个的视频经服务器转发，其余由播放器直连官方。转发的频道${effect}`;
+            return ` · <span title="${escapeHtml(title)}">${f.kind === 'all' ? '占上行' : '部分占上行'}</span>`;
+        }
+
         /** 失败时 channelCount 是上次成功缓存的数量，不是本轮抓到的数量。 */
         function extractorChannelSummary(h) {
             const count = h.channelCount || 0;
@@ -6481,8 +6496,8 @@
                         ${m.enabled
                             ? `<span title="上次成功抓取：${escapeHtml(when)}">${h.credentialRejected
                                 ? `<span class="credential-flag" title="${escapeHtml(h.credentialRejected)}">⚠️ 登录凭证已失效</span>`
-                                : extractorCardStatus(h)} · ${extractorChannelSummary(h)}</span>`
-                            : '<span class="module-off-label">○ 已关闭</span>'}
+                                : extractorCardStatus(h)} · ${extractorChannelSummary(h)}${extractorUplinkNote(m)}</span>`
+                            : `<span><span class="module-off-label">○ 已关闭</span>${extractorUplinkNote(m)}</span>`}
                         <span class="card-open-hint">${hasEditableConfig ? '配置 ›' : '详情 ›'}</span>
                     </div>
                 </div>`;
@@ -7287,6 +7302,40 @@
             return window.location.origin + '/u/' + token + '/' + kind;
         }
 
+        // 用户卡片底部的「访问来源」：按最近访问排，近 24 小时出现过的 IP 数单独数出来，一眼看出有没有被转给别人
+        function isLanIpText(ip) {
+            return /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd][0-9a-f]{2}:|fe80:)/i.test(String(ip || ''));
+        }
+
+        function userClientsHtml(u) {
+            const clients = (Array.isArray(u.recentClients) ? u.recentClients : [])
+                .filter(c => c && c.ip)
+                .sort((a, b) => String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')));
+            if (!clients.length) return { summary: '', details: '' };
+            const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+            const recent = clients.filter(c => Date.parse(c.lastSeenAt) > dayAgo).length;
+            const rows = clients.map(c => {
+                const uas = (Array.isArray(c.uas) ? c.uas : []).map(ua => ua || '未带 UA');
+                const when = c.lastSeenAt ? new Date(c.lastSeenAt).toLocaleString() : '';
+                return `<div style="padding:4px 0;border-top:1px dashed #eee;">
+                    <span style="font-family:monospace;color:#555;">${escapeHtml(c.ip)}</span>
+                    · ${c.count || 0} 次 · 最近 ${escapeHtml(when)}
+                    <div style="color:#aaa;word-break:break-all;">${uas.map(ua => escapeHtml(ua)).join('<br>')}</div>
+                </div>`;
+            }).join('');
+            const lanHint = clients.every(c => isLanIpText(c.ip))
+                ? '<div style="color:#b58105;margin-top:4px;">全是内网地址：要么都在局域网里看，要么经过了反向代理或 Docker 网关，要在反代上转发 X-Forwarded-For 才看得到真实来源。</div>'
+                : '';
+            return {
+                summary: ` · 近 24 小时 ${recent} 个 IP`,
+                details: `<details style="font-size:12px;color:#999;margin-top:4px;">
+                    <summary style="cursor:pointer;">访问来源（最近 ${clients.length} 个 IP，下面是各自用过的播放器）</summary>
+                    <div style="margin-top:4px;">同一时段冒出不认识的 IP 或播放器，可能是链接被转给了别人，点「重置令牌」后把新链接重新发给对方；重置后这里会清空重新记。</div>
+                    ${rows}${lanHint}
+                </details>`
+            };
+        }
+
         function renderUsers() {
             renderAlerts();   // 用户增删会改变「没设访问密码」那条提醒
             const box = document.getElementById('userList');
@@ -7302,6 +7351,7 @@
                 const pb = userLink(u.token, 'playback.xml');
                 const txt = userLink(u.token, 'txt');
                 const last = u.lastSeenAt ? new Date(u.lastSeenAt).toLocaleString() : '从未';
+                const clients = userClientsHtml(u);
                 const profOpts = userProfileOptionList()
                     .map(o => `<option value="${escapeHtml(o.value)}"${o.value === (u.profile || '') ? ' selected' : ''}>${escapeHtml(o.name)}</option>`).join('');
                 return `
@@ -7325,7 +7375,8 @@
                         <button class="btn btn-sm" onclick="copyToClipboard('${txt.replace(/'/g, "\\'")}', 'txt 地址')">复制 txt</button>
                         <span style="font-size:12px;color:#888;">绑定档 <select onchange="updateUserProfile('${u.id}', this.value)" style="font-size:12px;">${profOpts}</select></span>
                     </div>
-                    <div style="font-size:12px;color:#999;margin-top:6px;">最近访问：${escapeHtml(last)} · 请求数 ${u.reqCount || 0}</div>
+                    <div style="font-size:12px;color:#999;margin-top:6px;">最近访问：${escapeHtml(last)} · 请求数 ${u.reqCount || 0}${clients.summary}</div>
+                    ${clients.details}
                 </div>`;
             }).join('');
         }
@@ -7692,7 +7743,7 @@
         }
 
         async function regenUserToken(id) {
-            const confirmed = await showConfirm('重置令牌后，该用户旧的源地址会立即失效，需要把新地址重新发给他。继续？');
+            const confirmed = await showConfirm('重置令牌后，该用户旧的源地址会立即失效，需要把新地址重新发给对方；访问来源记录也会清空重新记。继续？');
             if (!confirmed) return;
             const r = await usersPost({ action: 'regenToken', id });
             if (r.success) { usersConfig = r.data; renderUsers(); showStatus('已重置令牌，请把新地址重新发给对方', 'success'); }
@@ -11062,14 +11113,34 @@ if(success){
             return null;
         }
 
-        /** 「已隐藏」区的完整列表：整组隐藏的在前，含隐藏频道的分组在后。所有调用点必须用这一份。 */
+        /** 频道被单独移去的分组（显示名），没移动过返回空串。key 同样带原始分组名。 */
+        function channelMovedTo(groupName, channel) {
+            return (myPlaylistConfig.channelGroupMap || {})[`${groupName}::${channel.id}`] || '';
+        }
+
+        /** 「已隐藏」频道行上的「→ 目标分组」：条目按原分组列，标出它隐藏前被移去哪、恢复后回哪。 */
+        function hiddenMovedTag(groupName, channel) {
+            const target = channelMovedTo(groupName, channel);
+            return target
+                ? `<span class="channel-group-tag in-hidden" title="隐藏前移到了「${escapeHtml(target)}」，恢复后回到那里">→ ${escapeHtml(target)}</span>`
+                : '';
+        }
+
+        /**
+         * 「已隐藏」区的完整列表：整组隐藏的在前，含隐藏频道的分组在后。所有调用点必须用这一份。
+         * 移出去的频道不受原分组的整组隐藏约束（服务端 movedTo 优先），所以整组条目里不列它们：
+         * 没单独隐藏的正显示在目标分组；单独隐藏了的归到「原分组 (隐藏频道)」，那里才有恢复按钮。
+         * 以前它们混在整组条目里，移动后再隐藏的台既没有单独一条、也恢复不出来。
+         */
         function hiddenAreaGroups() {
             const wholeGroups = (myPlaylistOriginalData || []).filter(g =>
                 !isSystemAnnouncementGroup(g) && isGroupHiddenByConfig(g.name)
-            );
+            ).map(g => ({ ...g, channels: g.channels.filter(ch => !channelMovedTo(g.name, ch)) }));
             const partialGroups = (myPlaylistOriginalData || []).map(g => {
-                if (isGroupHiddenByConfig(g.name)) return null;   // 整组已隐藏，不再重复列频道
-                const channels = g.channels.filter(ch => isChannelHiddenById(g.name, ch));
+                const wholeHidden = isGroupHiddenByConfig(g.name);   // 整组已隐藏：没移走的已在整组条目里，不再重复列
+                const channels = g.channels.filter(ch =>
+                    isChannelHiddenById(g.name, ch) && (!wholeHidden || channelMovedTo(g.name, ch))
+                );
                 return channels.length > 0 ? { ...g, channels, isPartialDelete: true } : null;
             }).filter(Boolean);
             return [...wholeGroups, ...partialGroups];
@@ -11734,7 +11805,7 @@ if(success){
             });
             hiddenAreaGroups().forEach((group, groupIndex) => {
                 (group.channels || []).forEach(channel => {
-                    // 整组隐藏的分组里，被单独移到可见分组的频道已经在上面列过，不再重复
+                    // 兜底去重：hiddenAreaGroups 已不在整组条目里列移走的频道，正常走不到这里
                     if (visibleKeys.has(`${group.name}::${channel.id}`)) return;
                     if (channelSearchKey(channel.name).includes(key)) {
                         results.push({ groupIndex, hidden: true, partial: !!group.isPartialDelete, groupName: group.name, channel });
@@ -12081,6 +12152,7 @@ if(success){
                                 <div class="my-playlist-channel-name" title="点击查看详情：${channel.name}" onclick="showChannelDetail('${channel.id}', true)" style="cursor: pointer;">
                                     <span class="channel-detail-hint" aria-hidden="true">ⓘ</span>${channel.name}
                                 </div>
+                                ${hiddenMovedTag(group.name, channel)}
                                 ${group.isPartialDelete && !isBatchMode ? `
                                     <div class="my-playlist-channel-actions" style="opacity: 1 !important;">
                                         <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); restoreChannel('${channel.id}', '${group.name}')">恢复</button>
@@ -13403,9 +13475,12 @@ if(success){
 
             if (!myPlaylistConfig.channelGroupMap) myPlaylistConfig.channelGroupMap = {};
             const n = selectedChannels.size;
-            selectedChannels.forEach(channelId => {
-                myPlaylistConfig.channelGroupMap[`${currentGroup.name}::${channelId}`] = target;
-            });
+            const keys = [...selectedChannels].map(channelId => `${currentGroup.name}::${channelId}`);
+            // 整组隐藏之前就单独隐藏过的频道，只改归类的话移过去仍是隐藏的（服务端先判 hiddenChannels），
+            // 一并取消隐藏——与搜索结果批量移动同一口径
+            const unhidden = keys.filter(k => myPlaylistConfig.hiddenChannels.includes(k)).length;
+            myPlaylistConfig.hiddenChannels = myPlaylistConfig.hiddenChannels.filter(k => !keys.includes(k));
+            keys.forEach(k => { myPlaylistConfig.channelGroupMap[k] = target; });
             try {
                 const response = await fetch(mpConfigUrl(), {
                     method: 'POST',
@@ -13417,7 +13492,7 @@ if(success){
                     selectedChannels.clear();
                     isBatchMode = false;
                     await loadMyPlaylist(false);
-                    showStatus(`已移动 ${n} 个频道到「${target}」`, 'success');
+                    showStatus(`已移动 ${n} 个频道到「${target}」${unhidden ? `，其中 ${unhidden} 个原本被单独隐藏，已一并恢复` : ''}`, 'success');
                 } else {
                     showStatus('移动失败', 'error');
                 }
