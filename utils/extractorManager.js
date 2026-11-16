@@ -904,6 +904,9 @@ class ExtractorManager {
         refreshConfigurable: module.refreshConfigurable !== false,
         refreshDescription: module.refreshDescription || '',
         health,
+        // 频道在播放列表里的来源标记（xt:<id>，咪咕是 migu）：后台据此把下面名单里的
+        // 频道名对到播放列表里的那个频道，点开看只读详情
+        sourceId: module.sourceId || sourceIdOf(module.id),
         // 详情弹窗列「抓到了哪些频道」（issue #164）：只给名字，地址等不出后台。
         // 来自缓存，关掉的模块也保留关闭前最后一轮；没抓到过就是空数组。
         channelGroups: cacheEntry.groups.map(group => ({
@@ -1081,7 +1084,7 @@ class ExtractorManager {
     // 配置可能影响播放地址的解析结果（画质、编码等），不清缓存的话三小时内
     // 继续下发旧参数的流——issue #60 就是这么来的。后台「源模块」页保存走的
     // 正是这条路，而 clearUrlCache 的另外两个调用点都覆盖不到它。
-    if (typeof module.clearResolveCache === 'function') module.clearResolveCache()
+    if (typeof module.clearResolveCache === 'function') module.clearResolveCache({ reason: 'config', previousConfig: prevConfig, config })
     // 配置变了，上一轮的结果不再代表当前配置——清掉「已成功过」的时间戳，
     // 让下一轮 tick 立刻重抓，而不是等到原定的刷新点。
     const cacheEntry = this.#cacheEntry(id)
