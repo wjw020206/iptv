@@ -13,6 +13,7 @@ import { printBlue, printGreen, printGrey, printMagenta, printRed, printYellow }
 import { channel, interfaceStr, fetchManifestDirect, rewriteManifest, inlineResolvedManifest } from "./utils/appUtils.js";
 import { toProxyManifest, lookup as lookupProxyTarget, pipeUpstream, probeUpstream, fetchNested, manifestCooling, markManifestResult } from "./utils/hlsProxy.js";
 import { dataPath } from "./utils/paths.js";
+import { acceptsGzip, createGzipFileCache } from "./utils/gzipResponse.js";
 import { cachedLogoFile } from "./utils/logoCache.js";
 import { packLogoFile } from "./utils/logoPack.js";
 import { getExtractorManager, getModuleConfig } from "./utils/extractorManager.js";
@@ -27,6 +28,7 @@ import { getChannelsAPI, getExternalSourcesAPI, saveExternalSourcesAPI,
 import { getEpgSourcesAPI, setEpgEnabledAPI, addEpgSourceAPI, updateEpgSourceAPI,
          removeEpgSourceAPI, expireEpgSourcesAPI } from "./utils/epgSourcesAPI.js";
 import { userManager, viewerIp } from "./utils/userManager.js";
+import { authFailLogLine } from "./utils/authFailLog.js";
 import { getUsersAPI, addUserAPI, updateUserAPI, removeUserAPI, regenUserTokenAPI } from "./utils/usersAPI.js";
 import { getAlertsAPI, getAlertTracker, postAlertsAPI } from "./utils/alerts.js";
 import { getNotifyAPI, postNotifyAPI, getNotifier } from "./utils/notify.js";
@@ -47,6 +49,8 @@ import { cleanUserAgent, userAgentOf } from "./utils/channelOpts.js";
 import { previewSource, previewPath, servePreview } from './utils/previewProxy.js';
 import { SYSTEM_ASSET_PATHS, readAnnouncementAsset } from "./utils/announcement.js";
 import { cleanCoreDumps } from "./utils/coreDumpCleanup.js";
+import { proxiedPublicBase } from "./utils/publicOrigin.js";
+import { handleHongguo, isHongguoPath, shutdownHongguo } from './modules/hongguo/index.js'
 
 // 自定义源「经网络代理转发」的播放引用（${replace}/proxy/cp-<hex>.m3u8）：不是抓取模块，挂到 resolverFor 上
 registerRefResolver(createCustomProxyResolver({
@@ -78,12 +82,15 @@ function clientOf(req) {
 // 这位客户端访问本实例用的来源（协议 + 主机）：经反代时取转发头，否则取 Host。
 // 写进下发给它自己的清单里，格式不对就回空串，调用方当作没有。
 function originOf(req) {
+  // 反代改写了 Host、访问者来自公网：和订阅里的频道地址一样用「公网地址」，见 utils/publicOrigin.js
+  const viaProxy = proxiedPublicBase(req.headers, host)
+  if (viaProxy) return viaProxy
   const forwardedHost = req.headers['x-forwarded-host']?.split(',')[0]?.trim()
-  const host = forwardedHost || String(req.headers.host || '')
-  if (!/^[a-z0-9.\-_:[\]]{1,255}$/i.test(host)) return ''
+  const requestHost = forwardedHost || String(req.headers.host || '')
+  if (!/^[a-z0-9.\-_:[\]]{1,255}$/i.test(requestHost)) return ''
   const forwardedProto = req.headers['x-forwarded-proto']?.split(',')[0]?.trim().toLowerCase()
   const proto = ['http', 'https'].includes(forwardedProto) ? forwardedProto : (forwardedHost ? 'https' : 'http')
-  return `${proto}://${host}`
+  return `${proto}://${requestHost}`
 }
 
 /**
@@ -252,6 +259,9 @@ function readBody(req) {
 // 升级过渡自愈只试一次（issue #29/#68）：见 /api/source-profiles POST
 let sourceIdsHealAttempted = false
 
+// 节目单的 gzip 版本，文件没变就复用（utils/gzipResponse.js）
+const gzipPlayback = createGzipFileCache()
+
 /**
  * 请求处理主体。
  *
@@ -341,6 +351,11 @@ async function handleRequest(req, res) {
       res.end('Admin page not found');
       printRed("管理页面文件不存在")
     }
+    return
+  }
+
+  if (isHongguoPath(routePath)) {
+    await handleHongguo(req, res, routePath, { adminPath, accessPrefix, passAuthed, userAuthed, passConfigured: pass !== '' })
     return
   }
 
@@ -1155,7 +1170,12 @@ async function handleRequest(req, res) {
 
   // 设置密码但未授权访问（非 admin/player/api 路由）：拒绝。用户访问令牌(userAuthed)放行内容
   if (pass !== "" && !passAuthed && !userAuthed) {
-    printRed(`身份认证失败`)
+    // 带上路径、来源 IP 和播放器，同一来源同一路径每分钟一行（utils/authFailLog.js）
+    const line = authFailLogLine({
+      method, urlPath, pass,
+      client: { ip: viewerIp(req.socket?.remoteAddress, headers['x-forwarded-for']), ua: headers['user-agent'] },
+    })
+    if (line) printRed(line)
     res.writeHead(403, { 'Content-Type': 'application/json;charset=UTF-8' });
     res.end(`身份认证失败`);
     return
@@ -1495,6 +1515,25 @@ async function handleRequest(req, res) {
     // 订阅拉取留痕（issue #98）：核心排查判据是「播放器拉订阅时带没带 ?relay=、是谁在拉」，
     // 此前这里零日志，App 二次拉订阅丢参数的场景完全无痕
     printGrey(`订阅拉取: ${method} ${routeUrlPath}${relayParam ? `?relay=${relayParam}` : '（无 relay 参数）'}｜${clientOf(req).tag}`)
+    // 节目单对所有人都是同一份文件，播放器接受 gzip 就给压缩过的（带上回看用的往日节目单后有 5 MB 多，
+    // 压完一成不到）。压不了就走下面的老路原样发，不让节目单因为压缩取不到。
+    if (routeUrlPath === "/playback.xml") {
+      res.setHeader('Vary', 'Accept-Encoding');
+      if (acceptsGzip(headers)) {
+        try {
+          const zipped = await gzipPlayback(dataPath("playback.xml"))
+          res.setHeader('Content-Type', 'text/xml;charset=UTF-8');
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.statusCode = 200;
+          res.end(zipped);
+          return
+        } catch {
+          // 文件还没生成或读不了：下面会回「获取失败」并打日志
+        }
+      }
+    }
     const mergeParam = new URLSearchParams(routeUrl.split('?')[1] || '').get('mergeLines')
     const mergeLinesOverride = mergeParam === '1' ? true : mergeParam === '0' ? false : undefined
     const interfaceObj = interfaceStr(routeUrlPath, headers, urlUserId, urlToken, effectiveProfile, accessPrefix, relayParam, mergeLinesOverride)
@@ -1693,7 +1732,7 @@ function shutdownProcess() {
     // 守护进程的重启因为浏览器异常关闭而无限挂住。
     try { server.close() } catch { /* 尚未监听或已经关闭 */ }
     await Promise.race([
-      shutdownModules(),
+      Promise.allSettled([shutdownModules(), shutdownHongguo()]),
       new Promise(resolve => setTimeout(resolve, 8_000)),
     ])
     process.exit(0)
