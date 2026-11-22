@@ -25,7 +25,9 @@
   --ui-radius-panel: 24px;
   --ui-radius-card: 18px;
   --ui-radius-control: 10px;
-  --page-gutter: clamp(14px, 3vw, 32px);
+  /* 页面左右留白与内容最大宽度跟 IPTV 后台一致（web/admin.html 的 body 内边距与 .container） */
+  --page-gutter: 32px;
+  --page-max-width: 1720px;
   --header-height: 72px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
   font-size: 15px;
@@ -40,7 +42,9 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; padding: 0 var(--page-gutter); }
-.site-header, main, footer { max-width: 1480px; margin-inline: auto; }
+.site-header, main, footer { max-width: var(--page-max-width); margin-inline: auto; }
+@media (max-width: 900px) { :root { --page-gutter: 20px; } }
+@media (max-width: 768px) { :root { --page-gutter: 14px; } }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: clamp(24px, 2.5vw, 32px); font-weight: 650; line-height: 1.25; }
 h2 { font-size: 21px; font-weight: 650; line-height: 1.35; }
@@ -107,12 +111,13 @@ button.danger:hover { border-color: var(--ui-danger-line); background: var(--ui-
   gap: 12px;
   min-width: 0;
 }
-.brand-mark { display: block; border-radius: 9px; flex: none; }
+/* 左侧只剩返回链接：抵掉内边距，让箭头与下方标题左对齐 */
 .admin-back {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   min-height: 38px;
+  margin-inline-start: -10px;
   padding: 6px 10px;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
@@ -224,7 +229,6 @@ button.danger:hover { border-color: var(--ui-danger-line); background: var(--ui-
   background: var(--ui-surface);
 }
 .catalog-filters:has(#categories[hidden]):has(#filters:empty) { display: none; }
-#categories { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 12px; }
 #filters:empty { display: none; }
 #categories:not([hidden]) + #filters:not(:empty) { margin-top: 6px; border-top: 1px solid var(--ui-line); padding-top: 6px; }
 .filter-row { display: flex; align-items: flex-start; gap: 10px; padding: 3px 0; }
@@ -240,14 +244,15 @@ button.danger:hover { border-color: var(--ui-danger-line); background: var(--ui-
   font-size: 12px;
 }
 .filter-options button:hover, #catalog-topics > button:hover, .ranges button:hover { background: var(--ui-surface-strong); }
-.topic-filter[open] { grid-column: 1 / -1; }
+/* 题材按钮固定在「内容类型」下一行左侧，展开收起都不挪位置 */
 .topic-filter summary {
   display: flex;
   align-items: center;
   gap: 7px;
   width: fit-content;
   min-height: 32px;
-  margin-block: 3px;
+  /* 上方加上「内容类型」行的 3px、下方加上分隔线前的 6px，上下各留约 11px */
+  margin-block: 8px 5px;
   padding: 4px 10px;
   border: 1px solid var(--ui-line-strong);
   border-radius: 7px;
@@ -270,7 +275,7 @@ button.danger:hover { border-color: var(--ui-danger-line); background: var(--ui-
 }
 .topic-filter[open] summary::after { margin-block-start: 3px; transform: rotate(225deg); }
 #catalog-active-topic { color: var(--ui-text-secondary); font-weight: 400; }
-#catalog-topics { margin-top: 8px; padding-block: 8px 2px; border-top: 1px solid var(--ui-line); }
+#catalog-topics { margin-top: 11px; padding-block: 8px 2px; border-top: 1px solid var(--ui-line); }
 #catalog-topics > button { margin-bottom: 5px; }
 
 .catalog-heading, .viewer-heading, .episode-heading, .dialog-heading {
@@ -519,8 +524,7 @@ footer { margin-top: 20px; padding-block: 15px 20px; border-top: 1px solid var(-
   :root { --header-height: 60px; }
   .site-header { padding-block: 9px; gap: 6px; }
   .source-path, .account { gap: 5px; }
-  .brand-mark { width: 34px; height: 34px; }
-  .admin-back { padding-inline: 5px; font-size: 12px; }
+  .admin-back { margin-inline-start: -5px; padding-inline: 5px; font-size: 12px; }
   #connection { max-width: 75px; font-size: 11px; }
   .account button { padding-inline: 7px; font-size: 12px; }
   .module-heading { margin-block: 18px 13px; }
@@ -544,9 +548,34 @@ footer { margin-top: 20px; padding-block: 15px 20px; border-top: 1px solid var(-
   .catalog-connection label:not(:first-child) { margin-top: 4px; }
 }
 @media (max-width: 360px) {
-  #categories { grid-template-columns: 1fr; }
   #connection { max-width: 56px; }
 }
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }
 }
+
+/* 复制等操作的提示，与 IPTV 后台的全局提示同一样式 */
+.toast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 30;
+  min-width: min(300px, calc(100vw - 32px));
+  max-width: min(500px, calc(100vw - 32px));
+  padding: 16px 22px;
+  border: 1px solid #505851;
+  border-radius: 13px;
+  background: #3c423e;
+  color: #fff;
+  box-shadow: 0 16px 42px rgba(25, 27, 25, .24);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: center;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.92);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.toast.error { border-color: var(--ui-danger-line); background: var(--ui-danger-soft); color: var(--ui-danger); }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }

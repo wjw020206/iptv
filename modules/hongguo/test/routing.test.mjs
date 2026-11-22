@@ -9,7 +9,7 @@ test('Hongguo requires admin access across pages, account operations and media',
   const root = await mkdtemp(join(tmpdir(), 'hongguo-routing-'));
   process.env.mdataDir = root;
   const { handleHongguo, isHongguoPath, shutdownHongguo } = await import('../index.js');
-  let access = { adminPath: 'control', accessPrefix: '', passAuthed: false, userAuthed: false, passConfigured: true };
+  let access = { adminPath: 'control', accessPrefix: '', passAuthed: false, userAuthed: false };
   const server = createServer((req, res) => handleHongguo(req, res, req.url.split('?')[0].slice(access.accessPrefix.length), access));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
@@ -30,13 +30,13 @@ test('Hongguo requires admin access across pages, account operations and media',
     await response.body.cancel();
   }
 
-  access = { ...access, passAuthed: true, userAuthed: true, passConfigured: false };
+  access = { ...access, passAuthed: true, userAuthed: true };
   assert.equal((await get('/hongguo/', { method: 'HEAD' })).status, 403);
   access = { ...access, userAuthed: false };
-  assert.equal((await get('/hongguo/', { method: 'HEAD', headers: { 'X-Forwarded-For': '192.0.2.8' } })).status, 403);
+  // 与 IPTV 后台同一规矩：能进后台（没设密码，或带了密码路径）就能进，不再区分本机与局域网
+  assert.equal((await get('/hongguo/', { method: 'HEAD', headers: { 'X-Forwarded-For': '192.0.2.8' } })).status, 200);
   assert.equal((await get('/hongguo/', { method: 'HEAD' })).status, 200);
 
-  access = { ...access, passConfigured: true };
   const redirect = await get('/hongguo');
   assert.equal(redirect.status, 308);
   assert.equal(redirect.headers.get('location'), './hongguo/');
@@ -52,17 +52,23 @@ test('Hongguo requires admin access across pages, account operations and media',
     assert.equal(new URL(emby.server, base + accessPrefix + '/hongguo/').href, base + '/hongguo');
   }
   access = { ...access, accessPrefix: '' };
-  const old = await get('/hongguo/emby/System/Info/Public');
-  assert.equal(old.status, 404);
-  await old.body.cancel();
 
   access = { ...access, passAuthed: false };
-  const publicInfo = await get('/hongguo/System/Info/Public');
-  assert.equal(publicInfo.status, 200);
-  assert.equal((await publicInfo.json()).ProductName, 'Emby Server');
-  const noSession = await get('/hongguo/Items');
-  assert.equal(noSession.status, 401);
-  await noSession.body.cancel();
+  // Emby 官方 App 等会在服务器地址后自动加 /emby，两种写法都要能用
+  for (const prefix of ['/hongguo', '/hongguo/emby', '/hongguo/Emby']) {
+    const publicInfo = await get(prefix + '/System/Info/Public');
+    assert.equal(publicInfo.status, 200, prefix);
+    assert.equal((await publicInfo.json()).ProductName, 'Emby Server');
+    const noSession = await get(prefix + '/Items');
+    assert.equal(noSession.status, 401, prefix);
+    await noSession.body.cancel();
+  }
+  // /emby 前缀只对 Emby 接口生效，管理页和管理接口照样要 IPTV 访问密码
+  for (const path of ['/hongguo/emby/', '/hongguo/emby/api/account', '/hongguo/emby/app.js']) {
+    const response = await get(path);
+    assert.equal(response.status, 403, path);
+    await response.body.cancel();
+  }
   access = { ...access, passAuthed: true };
 
   const post = (headers, body = '{}') => get('/hongguo/api/account/poll', { method: 'POST', headers, body });

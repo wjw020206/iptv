@@ -355,7 +355,7 @@ async function handleRequest(req, res) {
   }
 
   if (isHongguoPath(routePath)) {
-    await handleHongguo(req, res, routePath, { adminPath, accessPrefix, passAuthed, userAuthed, passConfigured: pass !== '' })
+    await handleHongguo(req, res, routePath, { adminPath, accessPrefix, passAuthed, userAuthed })
     return
   }
 
