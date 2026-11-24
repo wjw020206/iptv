@@ -23,7 +23,7 @@ export function isEmbyPath(pathname) {
   return /^\/(?:system|users|sessions|views|userviews|library|items|useritems|shows|videos?|favoriteitems|playeditems)(?:\/|$)/i.test(pathname);
 }
 
-function matchesPassword(input, expected) {
+function matchesSecret(input, expected) {
   return typeof input === 'string' && input.length === expected.length
     && timingSafeEqual(Buffer.from(digest(input), 'hex'), Buffer.from(digest(expected), 'hex'));
 }
@@ -55,17 +55,24 @@ function mediaRef(state, value) {
   return { id, kind: number === 0 ? 'Series' : number === seasonNumber ? 'Season' : 'Episode', show, number };
 }
 
-function itemRefs(state, parentId, includeTypes, recursive) {
+function itemTypes(value) {
+  return new Set(value?.toLowerCase().split(',').map(type => type.trim()).filter(Boolean));
+}
+
+function itemRefs(state, parentId, includeTypes, recursive, latest) {
   const parent = parentId ? mediaRef(state, parentId) : null;
   if (parentId && !parent) return [];
   const wants = kind => !includeTypes.size || includeTypes.has(kind.toLowerCase());
   if (parent?.kind === 'Episode') return [];
   if (parent?.show) {
     const show = parent.show;
-    if (parent.kind === 'Series' && !recursive && !includeTypes.has('episode')) {
+    if (parent.kind === 'Series' && !recursive && !latest && !includeTypes.has('episode')) {
       return wants('Season') ? [mediaRef(state, mediaId(show.id, seasonNumber))] : [];
     }
     return wants('Episode') ? episodeRefs(show) : [];
+  }
+  if (!parent && !recursive && !latest && (!includeTypes.size || includeTypes.has('collectionfolder'))) {
+    return [mediaRef(state, privateId(state, 'library'))];
   }
   if (!wants('Series')) return recursive && includeTypes.has('episode') ? state.series.flatMap(episodeRefs) : [];
   return state.series.map(show => ({ id: mediaId(show.id), kind: 'Series', show, number: 0 }));
@@ -78,7 +85,10 @@ function episodeRefs(show) {
 }
 
 function publicInfo(state) {
-  return { Id: state.serverId, ServerName: serverName, Version: '4.9.0.0', ProductName: 'Emby Server', StartupWizardCompleted: true };
+  return {
+    Id: state.serverId, ServerName: serverName, Version: '4.9.0.0', ProductName: 'Emby Server',
+    StartupWizardCompleted: true, IPTVBridge: 'hongguo',
+  };
 }
 
 function user(state) {
@@ -134,6 +144,20 @@ function userData(state, id) {
   };
 }
 
+function artworkTag(state, show) {
+  if (!state.key || !show?.cover) return '';
+  return createHmac('sha256', state.key).update(`artwork:${show.id}:${show.cover}`).digest('hex').slice(0, 32);
+}
+
+function directMediaSource(id, runtime) {
+  return {
+    Id: id, Name: '红果', Container: 'mp4', Protocol: 'File', Type: 'Default',
+    SupportsDirectPlay: true, SupportsDirectStream: true, SupportsTranscoding: false,
+    RunTimeTicks: runtime, IsRemote: false, IsInfiniteStream: false,
+    RequiresOpening: false, RequiresClosing: false,
+  };
+}
+
 function itemDto(state, ref) {
   const { id, kind, show, number } = ref;
   const base = { Id: id, ServerId: state.serverId, Type: kind, UserData: userData(state, id) };
@@ -142,7 +166,8 @@ function itemDto(state, ref) {
     return { ...base, Name: '红果短剧', CollectionType: 'tvshows', IsFolder: true, ChildCount: state.series.length };
   }
   const seriesId = mediaId(show.id);
-  const imageTags = show.cover ? { Primary: digest(show.cover).slice(0, 16) } : {};
+  const tag = artworkTag(state, show);
+  const imageTags = tag ? { Primary: tag } : {};
   if (kind === 'Series') {
     return {
       ...base, Name: show.title, Overview: show.intro, Genres: show.tags, ParentId: libraryId,
@@ -156,10 +181,12 @@ function itemDto(state, ref) {
       ParentId: seriesId, ImageTags: imageTags, IsFolder: true, ChildCount: show.total,
     };
   }
+  const runtime = state.jellyfinUserData?.[id]?.runtime;
   return {
     ...base, Name: `第 ${number} 集`, IndexNumber: number, ParentIndexNumber: 1, SeasonName: '全集',
     SeriesId: seriesId, SeriesName: show.title, ParentId: mediaId(show.id, seasonNumber), SeasonId: mediaId(show.id, seasonNumber),
-    Container: 'mp4', MediaType: 'Video', IsFolder: false, RunTimeTicks: state.jellyfinUserData?.[id]?.runtime,
+    Container: 'mp4', MediaType: 'Video', VideoType: 'VideoFile', IsFolder: false, RunTimeTicks: runtime,
+    MediaSources: [directMediaSource(id, runtime)],
     DanmakuUrl: `/Items/${id}/Danmaku`,
     ImageTags: imageTags, SeriesPrimaryImageTag: imageTags.Primary, PrimaryImageAspectRatio: 2 / 3,
   };
@@ -174,12 +201,13 @@ function sliceItems(items, query) {
 
 function filteredItems(state, refs, query) {
   const term = query.get('searchterm')?.trim().toLowerCase();
+  const excluded = itemTypes(query.get('excludeitemtypes'));
   const filters = (query.get('filters') || '').toLowerCase().split(',');
   const favorites = query.get('isfavorite') === 'true' || filters.includes('isfavorite');
   const played = query.get('isplayed') ?? (filters.includes('isplayed') ? 'true' : filters.includes('isunplayed') ? 'false' : null);
   const sort = query.get('sortby')?.toLowerCase();
   let items = refs.map(ref => itemDto(state, ref)).filter(item =>
-    (!term || (item.Name + ' ' + (item.SeriesName || '')).toLowerCase().includes(term)) &&
+    !excluded.has(item.Type.toLowerCase()) && (!term || (item.Name + ' ' + (item.SeriesName || '')).toLowerCase().includes(term)) &&
     (!favorites || item.UserData.IsFavorite) && (played === null || item.UserData.Played === (played === 'true')));
   if (sort?.includes('random')) {
     // Only the head is used by clients asking for shuffle.
@@ -266,6 +294,29 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
     resumingSessions.delete(playSessionId); resumingSessions.set(playSessionId, Date.now() + 30 * 60_000);
     while (resumingSessions.size > 200) resumingSessions.delete(resumingSessions.keys().next().value);
   };
+  // 播放器只在全屏播放时带进度要 HLS（多画面小窗不会），所以同一台设备开始续播一集，就说明它之前的播放会话都结束了。
+  // 那些会话的租约要是还在（播放器被杀、没报停止，或停止后又晚到一次分段请求），会占着唯一的转码 45 秒：
+  // 续播等满 12 秒报「正在准备其他剧集」，播放器退回从头播的 MP4。这里把它们作废，晚到的请求也不再续上租约。
+  const viewerSessions = new Map(), retiredLeases = new Map();
+  const selectedOffsets = new Map();
+  const selectOffset = (ref, lease, offset) => {
+    selectedOffsets.delete(lease);
+    selectedOffsets.set(lease, offset);
+    while (selectedOffsets.size > 200) selectedOffsets.delete(selectedOffsets.keys().next().value);
+    playback.releaseMediaLease(ref.show.id, ref.number, lease, { keepOffset: offset });
+  };
+  const noteSession = (lease, viewer) => {
+    viewerSessions.delete(lease); viewerSessions.set(lease, viewer); retiredLeases.delete(lease);
+    while (viewerSessions.size > 200) viewerSessions.delete(viewerSessions.keys().next().value);
+  };
+  const retireOtherSessions = (viewer, current) => {
+    const retired = [];
+    for (const [lease, owner] of viewerSessions) if (owner === viewer && lease !== current) retired.push(lease);
+    for (const [lease, expires] of retiredLeases) if (expires <= Date.now()) retiredLeases.delete(lease);
+    for (const lease of retired) { viewerSessions.delete(lease); retiredLeases.set(lease, Date.now() + 30 * 60_000); }
+    while (retiredLeases.size > 200) retiredLeases.delete(retiredLeases.keys().next().value);
+    if (retired.length) playback.dropMediaLeases(retired);
+  };
   async function authenticate(req, res) {
     const input = await body(req);
     const token = randomBytes(32).toString('hex');
@@ -274,7 +325,7 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
     const state = await catalog.update(previous => {
       const name = input.Username ?? input.username;
       if (!previous.key || typeof name !== 'string' || name.toLowerCase() !== username
-        || !matchesPassword(input.Pw ?? input.pw, playbackPassword(previous.key))) {
+        || !matchesSecret(input.Pw ?? input.pw, playbackPassword(previous.key))) {
         throw new AppError('MEDIA_SERVER_UNAUTHORIZED', '播放账号或密码有误', 401);
       }
       const sessions = (previous.jellyfinSessions || []).filter(item => !device || item.device !== device);
@@ -284,7 +335,11 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
   }
 
   function holdMedia(entry, keyHash, playSessionId) {
-    entry.job?.leases.set(mediaLease(keyHash, playSessionId), Date.now() + 45_000);
+    const lease = mediaLease(keyHash, playSessionId);
+    if (retiredLeases.get(lease) > Date.now()) return;
+    const selected = selectedOffsets.get(lease);
+    if (selected !== undefined && (entry.job?.offset || 0) !== selected) return;
+    entry.job?.leases.set(lease, Date.now() + 45_000);
   }
 
   async function playerEntry(res, keyHash, ref, { completeFile = false, resumeOffset = 0, playSessionId = '' } = {}) {
@@ -325,6 +380,13 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
       return;
     }
     if (req.method === 'POST' && route === '/users/authenticatebyname') { await authenticate(req, res); return; }
+    // Some Emby clients fetch cover images using only the tag from the authenticated item response.
+    const taggedImage = route.match(/^\/items\/([a-f0-9-]+)\/images\/(?:primary|thumb|backdrop)(?:\/0)?$/);
+    if (taggedImage && ['GET', 'HEAD'].includes(req.method) && params.has('tag')) {
+      const ref = mediaRef(state, taggedImage[1]);
+      const tag = artworkTag(state, ref?.show);
+      if (tag && matchesSecret(params.get('tag'), tag)) { await artwork(req, res, ref, fetcher); return; }
+    }
     const token = readAuth(req, params);
     const keyHash = typeof token === 'string' && tokenPattern.test(token) ? digest(token) : '';
     const session = authorization(state, keyHash);
@@ -352,15 +414,16 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
       json(res, 200, sliceItems(historyItems(state, params, path === '/shows/nextup'), params)); return;
     }
     if (req.method === 'GET' && ['/items', '/items/latest'].includes(path)) {
-      const types = new Set((params.get('includeitemtypes') || '').toLowerCase().split(',').filter(Boolean));
-      const refs = itemRefs(state, params.get('parentid'), types, params.get('recursive') === 'true');
+      const latest = path === '/items/latest';
+      const types = itemTypes(params.get('includeitemtypes'));
+      const refs = itemRefs(state, params.get('parentid'), types, params.get('recursive') === 'true', latest);
       const items = sliceItems(filteredItems(state, refs, params), params);
-      json(res, 200, path === '/items/latest' ? items.Items : items); return;
+      json(res, 200, latest ? items.Items : items); return;
     }
     const hierarchy = path.match(/^\/shows\/([a-f0-9-]+)\/(seasons|episodes)$/);
     if (req.method === 'GET' && hierarchy) {
       const ref = mediaRef(state, hierarchy[1]);
-      if (ref?.kind !== 'Series') throw new AppError('MEDIA_SERVER_NOT_FOUND', '剧集已移除', 404);
+      if (!ref?.show) throw new AppError('MEDIA_SERVER_NOT_FOUND', '剧集已移除', 404);
       const [, , child] = hierarchy;
       let refs = child === 'seasons' ? [mediaRef(state, mediaId(ref.show.id, seasonNumber))] : episodeRefs(ref.show);
       const season = params.get('seasonid');
@@ -405,23 +468,31 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
         const resumeOffset = preferHLS && Number.isSafeInteger(startTicks) && startTicks > 0
           ? Math.floor(startTicks / 10_000) / 1000 : 0;
         if (!preferHLS && startTicks > 0) markResuming(playSessionId);
+        const lease = mediaLease(keyHash, playSessionId), viewer = deviceKey(req) || keyHash;
+        noteSession(lease, viewer);
+        const seeking = preferHLS && requestedSession && ref.kind === 'Episode' && params.get('iptvseekhls') === 'true';
+        if (seeking && !res.destroyed) selectOffset(ref, lease, resumeOffset);
         let entry;
         if (resumeOffset > 0) {
+          retireOtherSessions(viewer, lease);
           try {
             entry = await playerEntry(res, keyHash, ref, { resumeOffset, playSessionId });
           } catch (error) {
             if (error.code === 'APP_BUSY' || error.code?.startsWith('MEDIA_SERVER_')) throw error;
+            // 退回整集时播放器只能从头播：记一行，下次排查不用猜
+            console.warn(JSON.stringify({ event: 'resume_hls_fallback', code: error.code || error.name }));
           }
         }
-        if (!entry && !res.destroyed) entry = await playerEntry(res, keyHash, ref, { playSessionId });
+        if (!entry && !res.destroyed) {
+          if (seeking && selectedOffsets.get(lease) !== resumeOffset) return res.writeHead(409).end();
+          if (seeking) selectOffset(ref, lease, 0);
+          entry = await playerEntry(res, keyHash, ref, { playSessionId });
+        }
         if (!entry) return;
         const duration = Math.round((entry.expectedDuration || entry.duration) * ticksPerSecond);
         const source = {
-          Id: ref.id, Name: '红果', Container: 'mp4', Protocol: 'File', Type: 'Default',
-          SupportsDirectPlay: true, SupportsDirectStream: true, SupportsTranscoding: false,
-          RunTimeTicks: duration, Size: entry.size ?? (entry.job?.complete ? entry.job.size : undefined),
-          IsRemote: false, IsInfiniteStream: false,
-          RequiresOpening: false, RequiresClosing: false, DefaultAudioStreamIndex: 1,
+          ...directMediaSource(ref.id, duration),
+          Size: entry.size ?? (entry.job?.complete ? entry.job.size : undefined), DefaultAudioStreamIndex: 1,
           MediaStreams: [
             { Type: 'Video', Codec: entry.video, Index: 0, Width: entry.width, Height: entry.height, IsDefault: true },
             { Type: 'Audio', Codec: entry.audio, Index: 1, IsDefault: true },
@@ -431,6 +502,14 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
         if (preferHLS && entry.job && (offsetMs > 0 || (startTicks === 0 && !entry.job.complete))) {
           const offsetPath = offsetMs > 0 ? `${offsetMs}/` : '';
           source.DirectStreamUrl = `/Videos/${ref.id}/hls/${entry.token}/${offsetPath}index.m3u8`;
+        } else if (!preferHLS && params.get('isplayback')?.toLowerCase() === 'true') {
+          const prefix = req.url.split('?')[0].replace(/\/(?:users\/[a-f0-9-]+\/)?items\/[a-f0-9-]+\/playbackinfo\/?$/i, '');
+          const streamQuery = new URLSearchParams({
+            Static: 'true', MediaSourceId: ref.id, PlaySessionId: playSessionId, api_key: token,
+          });
+          source.DirectStreamUrl = `${prefix}/Videos/${ref.id}/stream.mp4?${streamQuery}`;
+          source.Protocol = 'Http';
+          source.SupportsDirectPlay = false;
         }
         json(res, 200, { MediaSources: [source], PlaySessionId: playSessionId }); return;
       }
@@ -442,8 +521,16 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
       // 带其他 Range 的（拖动、探测长度）和续播的仍等完整 MP4，免得拖不动、或前后两份文件的字节位置对不上
       const startTicks = Number(params.get('starttimeticks') || 0);
       const resuming = startTicks > 0 || resumingSessions.get(playSessionId) > Date.now();
-      const sequential = !resuming && /^(?:bytes=0-)?$/.test(req.headers.range || '');
-      const entry = await playerEntry(res, keyHash, mediaRef(state, video[1]), { completeFile: !sequential, playSessionId });
+      const seekableFallback = params.get('iptvrequireseekable') === 'true';
+      const requiresSeekable = resuming || seekableFallback;
+      const sequential = !requiresSeekable && /^(?:bytes=0-)?$/.test(req.headers.range || '');
+      const ref = mediaRef(state, video[1]);
+      if (seekableFallback && playSessionId && ref?.kind === 'Episode') {
+        markResuming(playSessionId);
+        // The trimmed HLS worker and the full-file worker cannot run together.
+        selectOffset(ref, mediaLease(keyHash, playSessionId), 0);
+      }
+      const entry = await playerEntry(res, keyHash, ref, { completeFile: !sequential, playSessionId });
       if (!entry) return;
       if (entry.job && !entry.job.complete) {
         await serveGrowing(req, res, entry, () => { holdMedia(entry, keyHash, playSessionId); playback.renewLocalMedia(entry); });
@@ -457,6 +544,10 @@ export function createMediaServer({ catalog, playback, danmaku, serveMedia, serv
       const playSessionId = sessionID(params.get('playsessionid'));
       const ref = mediaRef(state, episode);
       if (ref?.kind !== 'Episode') throw new AppError('MEDIA_SERVER_NOT_FOUND', '分集不存在', 404);
+      const selected = selectedOffsets.get(mediaLease(keyHash, playSessionId));
+      if (selected !== undefined && Math.round(selected * 1000) !== offsetMs) {
+        throw new AppError('SEEK_SUPERSEDED', '已切换到新的播放位置', 409);
+      }
       let entry;
       try {
         entry = await playback.byToken(mediaToken, { localMedia: true });
