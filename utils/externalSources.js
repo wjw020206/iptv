@@ -671,7 +671,7 @@ function inheritExistingSourceIds(incoming, current) {
 const SERVER_OWNED_KEYS = ['seededBuiltInUrls', 'retiredBuiltInsV1', 'seededDefaultSubscriptions', 'networkShareNameV1']
 
 /**
- * 把内置订阅源**重新**播种回来（用户在「内置源」那一段主动打开开关时调用）。
+ * 把内置订阅源**重新**播种回来（用户在「批量开关」的「内置源」一节主动打开时调用）。
  *
  * 与启动期的 ensureBuiltInSubscriptions 区别在于它**无视 seededBuiltInUrls**：
  * 那个账本的意思是「别自己复活」，而这里是用户明确点了开关说「我要它」——
@@ -1253,6 +1253,31 @@ class ExternalSourceManager {
       for (const ch of group.dataList) {
         if (!ch.proxyRef) continue
         out.push({ ref: ch.proxyRef, name: ch.name, url: ch.url, opts: ch.opts, useProxy: ch.useProxy, topFirst: ch.topFirst, sourceId: ch.sourceId, sourceName: names.get(ch.sourceId) || '' })
+      }
+    }
+    return out
+  }
+
+  /**
+   * 后台网页播放时可由服务器转发的频道（customSourceProxy.js 的 web 模式）：用户自己加的源
+   * （订阅 / 直连 / 抓取）里的公网 http(s) 地址。内置「精选频道」订阅不在内。
+   * 改写过播放入口的频道沿用它的引用，其余按同一算法现算——开关一开一关引用不变。
+   * 这里只是名单，不改订阅里写的地址。
+   */
+  webPlaybackChannels() {
+    const names = new Map((this.sources.sources || []).filter(s => s && s.id).map(s => [`ext:${s.id}`, s.name]))
+    const out = []
+    for (const group of this.getValidChannels()) {
+      for (const ch of group.dataList) {
+        if (ch.builtInSubscription || !proxiableUrl(ch.url)) continue
+        const sourceId = String(ch.sourceId || '').replace(/^ext:/, '')
+        if (!sourceId) continue
+        out.push({
+          ref: ch.proxyRef || proxyRefFor(sourceId, ch.name, ch.url),
+          name: ch.name, url: ch.url, opts: ch.opts,
+          useProxy: ch.useProxy === true, topFirst: ch.topFirst === true,
+          sourceId: ch.sourceId, sourceName: names.get(ch.sourceId) || '',
+        })
       }
     }
     return out
